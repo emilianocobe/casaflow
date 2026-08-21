@@ -36,12 +36,12 @@ Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor
 
 ## 🚀 Probarla
 
-**Online**: _(GitHub Pages — link al publicar)_
+**Online**: **https://emilianocobe.github.io/casaflow/**
 
 **Local**: cloná el repo y abrí `index.html` en el navegador. No hay build, no hay dependencias.
 
 ```bash
-git clone https://github.com/TU-USUARIO/casaflow.git
+git clone https://github.com/emilianocobe/casaflow.git
 cd casaflow
 # abrí index.html — eso es todo
 ```
