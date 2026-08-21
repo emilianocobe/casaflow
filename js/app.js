@@ -39,7 +39,7 @@ function openModal(html, { wide = false } = {}) {
   const h3 = layer.querySelector('h3');
   if (h3) h3.id = 'modal-title';
   layer.classList.add('open');
-  const f = layer.querySelector('input, select, button:not(.modal-x)');
+  const f = layer.querySelector('input, select, button:not(.modal-x)') || layer.querySelector('.modal-x');
   if (f) f.focus();
 }
 
@@ -61,7 +61,8 @@ document.addEventListener('keydown', (ev) => {
       'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])');
     if (!focusables.length) return;
     const first = focusables[0], last = focusables[focusables.length - 1];
-    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    if (!layer.contains(document.activeElement)) { ev.preventDefault(); first.focus(); }
+    else if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   }
 });
@@ -460,8 +461,9 @@ function orgDashboard(db) {
   const next = nextPayday(todayISO());
   const daysToPay = next ? Math.round((fromISO(next) - fromISO(todayISO())) / 86400000) : null;
 
-  // Pendiente = pago vencido sin marcar Y con trabajo real en su ventana
-  const duePast = paydaysAround(todayISO()).filter((p) => p < todayISO() && p >= addDays(todayISO(), -120));
+  // Pendiente = pago vencido (incluye hoy) sin marcar Y con trabajo real en su ventana.
+  // Mismo criterio que la vista Pagos: p <= hoy, sobre toda la historia disponible.
+  const duePast = paydaysAround(todayISO()).filter((p) => p <= todayISO());
   const pendingCount = duePast.reduce((a, p) => {
     const w = payWindow(p);
     return a + staff.filter((m) =>
@@ -476,11 +478,19 @@ function orgDashboard(db) {
     label: m.name, color: m.color, value: costIn(db, r.from, r.to, m.id),
   })).filter((i) => i.value > 0);
 
-  // serie por día
+  // serie por día (solo personal activo); en rangos largos, agrupada por semana
+  const staffHours = (from, to) => staff.reduce((a, m) => a + hoursIn(db, from, to, m.id), 0);
+  const totalDays = Math.round((fromISO(r.to) - fromISO(r.from)) / 86400000) + 1;
   const points = [];
-  for (let iso = r.from; iso <= r.to; iso = addDays(iso, 1)) {
-    points.push({ label: fmtDateShort(iso), value: hoursIn(db, iso, iso) });
-    if (points.length > 62) break;
+  if (totalDays > 62) {
+    for (let iso = r.from; iso <= r.to; iso = addDays(iso, 7)) {
+      const end = addDays(iso, 6) <= r.to ? addDays(iso, 6) : r.to;
+      points.push({ label: `Sem. ${fmtDateShort(iso)}`, value: staffHours(iso, end) });
+    }
+  } else {
+    for (let iso = r.from; iso <= r.to; iso = addDays(iso, 1)) {
+      points.push({ label: fmtDateShort(iso), value: staffHours(iso, iso) });
+    }
   }
 
   const insight = orgInsight(db, staff, r);
@@ -570,8 +580,9 @@ function orgInsight(db, staff, r) {
   if (!staff.length) return '';
   const days = Math.round((fromISO(r.to) - fromISO(r.from)) / 86400000) + 1;
   const prevR = { from: addDays(r.from, -days), to: addDays(r.from, -1) };
-  const now = hoursIn(db, r.from, r.to);
-  const before = hoursIn(db, prevR.from, prevR.to);
+  const sumActive = (from, to) => staff.reduce((a, m) => a + hoursIn(db, from, to, m.id), 0);
+  const now = sumActive(r.from, r.to);
+  const before = sumActive(prevR.from, prevR.to);
   if (!now && !before) return '';
   let phrase;
   if (!before) phrase = `El equipo sumó <b>${fmtNum(now)} h</b> en este período.`;
@@ -766,11 +777,14 @@ function orgEquipo(db) {
 
 function staffFormModal(db, member) {
   const isNew = !member;
-  const selected = member && STAFF_COLORS.includes(member.color) ? member.color : STAFF_COLORS[0];
-  const colors = STAFF_COLORS.map((c) => `
-    <label class="color-pick"><input type="radio" name="color" value="${c}"
+  // Si el color guardado no está en la paleta (backup importado), se ofrece como opción
+  const palette = member && member.color && !STAFF_COLORS.includes(member.color)
+    ? [member.color, ...STAFF_COLORS] : STAFF_COLORS;
+  const selected = member && palette.includes(member.color) ? member.color : palette[0];
+  const colors = palette.map((c) => `
+    <label class="color-pick"><input type="radio" name="color" value="${esc(c)}"
       ${c === selected ? 'checked' : ''}>
-      <span style="--c:${c}"></span></label>`).join('');
+      <span style="--c:${esc(c)}"></span></label>`).join('');
   openModal(`
     <h3>${isNew ? 'Nueva colaboradora' : 'Editar a ' + esc(member.name)}</h3>
     <form data-action-submit="staff-save" ${member ? `data-id="${member.id}"` : ''}>
@@ -1110,7 +1124,7 @@ document.addEventListener('change', (ev) => {
       file.text().then((txt) => {
         try { importJSON(txt); toast('Respaldo importado ✔'); route(); }
         catch (e) { toast(e.message, 'err'); }
-      });
+      }).catch(() => toast('No se pudo leer el archivo.', 'err'));
       break;
     }
   }
@@ -1168,8 +1182,9 @@ document.addEventListener('submit', (ev) => {
     }
     case 'staff-save': {
       const id = form.dataset.id;
-      const pickedColor = STAFF_COLORS.includes(String(fd.get('color')))
-        ? String(fd.get('color')) : STAFF_COLORS[0];
+      const rawColor = String(fd.get('color') || '');
+      const pickedColor = STAFF_COLORS.includes(rawColor) || COLOR_RE.test(rawColor)
+        ? rawColor : STAFF_COLORS[0];
       if (id) {
         const m = staffById(db, id);
         m.name = String(fd.get('name')).trim();
