@@ -270,6 +270,19 @@ function renderNoAccess() {
   </main>`;
 }
 
+function renderArchived() {
+  $app().innerHTML = `
+  ${topbar(loadDB(), { showLogout: true })}
+  <main class="wrap view-enter">
+    <section class="card">
+      <h2 class="card-title">${icon('info')} Tu acceso está pausado</h2>
+      <p class="muted">Quien organiza la casa archivó tu perfil. Si creés que es un error, hablá con esa persona
+        para que lo restaure; tus horas anteriores se conservan.</p>
+      <div class="btn-row"><button class="btn btn-ghost" data-action="logout">Salir</button></div>
+    </section>
+  </main>`;
+}
+
 function renderError() {
   $app().innerHTML = `
   ${topbar(loadDB(), { showLogout: true })}
@@ -338,7 +351,10 @@ function askPin() {
 
 function renderCollab(db, session) {
   const me = staffById(db, session.staffId);
-  if (!me || !me.active) { setSession(null); return go('#/'); }
+  if (!me || !me.active) {
+    if (Store.mode === 'cloud') return renderArchived();
+    setSession(null); return go('#/');
+  }
 
   const t = todayISO();
   const wk = periodRange('week');
@@ -1416,7 +1432,7 @@ document.addEventListener('submit', (ev) => {
       const pickedColor = STAFF_COLORS.includes(rawColor) || COLOR_RE.test(rawColor)
         ? rawColor : STAFF_COLORS[0];
       const email = String(fd.get('email') || '').trim().toLowerCase();
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('El email no parece válido', 'err'); return; }
+      if (email && !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) { toast('El email no parece válido', 'err'); return; }
       if (id) {
         updateStaff(db, id, { name: String(fd.get('name')), color: pickedColor, email });
         toast('Equipo actualizado');

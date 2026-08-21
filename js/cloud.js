@@ -34,6 +34,8 @@ const Cloud = (() => {
     routeTimer = setTimeout(() => { if (typeof route === 'function') route(); }, 40);
   }
 
+  let gen = 0; // token de generación: descarta resoluciones viejas si cambia la sesión
+
   function init() {
     if (!enabled) return false;
     firebase.initializeApp(cfg);
@@ -41,11 +43,17 @@ const Cloud = (() => {
     fs = firebase.firestore();
     Store.mode = 'cloud';
     Object.assign(Store, writers);
+    auth.getRedirectResult().catch((e) => {
+      console.error('[CasaFlow] redirect', e);
+      state = 'error'; errorMsg = 'No se pudo completar el ingreso (' + (e.code || e.message) + ').';
+      scheduleRoute();
+    });
     auth.onAuthStateChanged(onAuth);
     return true;
   }
 
   async function onAuth(u) {
+    const my = ++gen;
     stopListeners();
     user = u;
     if (!u) {
@@ -53,18 +61,24 @@ const Cloud = (() => {
       setDB(DEFAULT_DB()); scheduleRoute(); return;
     }
     state = 'loading'; scheduleRoute();
-    try { await resolveRole(); }
-    catch (e) { console.error('[CasaFlow] acceso', e); state = 'error'; errorMsg = e.message; scheduleRoute(); }
+    try { await resolveRole(my); }
+    catch (e) {
+      if (my !== gen) return;
+      console.error('[CasaFlow] acceso', e);
+      state = 'error'; errorMsg = e.message; scheduleRoute();
+    }
   }
 
-  async function resolveRole() {
+  async function resolveRole(my) {
     const owned = await fs.collection('houses').where('ownerUid', '==', user.uid).limit(1).get();
+    if (my !== gen) return;
     if (!owned.empty) {
       houseId = owned.docs[0].id; role = 'org'; staffId = null;
       subscribe(); return;
     }
     const email = (user.email || '').toLowerCase();
     const inv = email ? await fs.doc('invites/' + email).get() : null;
+    if (my !== gen) return;
     if (inv && inv.exists) {
       houseId = inv.data().houseId; staffId = inv.data().staffId; role = 'collab';
       subscribe(); return;
@@ -90,10 +104,18 @@ const Cloud = (() => {
       got.house = true; check();
     }, onErr));
 
-    unsubs.push(base.collection('staff').onSnapshot((snap) => {
-      db.staff = snap.docs.map((doc) => ({ id: doc.id, ...doc.data(), rates: rates[doc.id] || [] }));
-      got.staff = true; check();
-    }, onErr));
+    if (role === 'org') {
+      unsubs.push(base.collection('staff').onSnapshot((snap) => {
+        db.staff = snap.docs.map((doc) => ({ id: doc.id, ...doc.data(), rates: rates[doc.id] || [] }));
+        got.staff = true; check();
+      }, onErr));
+    } else {
+      // una colaboradora solo lee su propia ficha (sin tarifas)
+      unsubs.push(base.collection('staff').doc(staffId).onSnapshot((doc) => {
+        db.staff = doc.exists ? [{ id: doc.id, ...doc.data(), rates: [] }] : [];
+        got.staff = true; check();
+      }, onErr));
+    }
 
     if (role === 'org') {
       unsubs.push(base.collection('rates').onSnapshot((snap) => {
@@ -145,19 +167,42 @@ const Cloud = (() => {
         .set({ name: s.houseName, ownerName: s.ownerName, paySchedule: s.paySchedule }, { merge: true })
         .catch(writeErr);
     },
-    putStaff(m, prevEmail) {
-      const batch = fs.batch();
-      batch.set(fs.doc(`houses/${houseId}/staff/${m.id}`), {
-        name: m.name, color: m.color, email: m.email || '',
-        active: !!m.active, createdAt: m.createdAt || new Date().toISOString(),
-      });
-      if (prevEmail && prevEmail !== m.email) batch.delete(fs.doc('invites/' + prevEmail));
-      if (m.email) {
-        batch.set(fs.doc('invites/' + m.email), {
-          houseId, staffId: m.id, ownerUid: user.uid, name: m.name,
+    async putStaff(m, prevEmail) {
+      try {
+        const batch = fs.batch();
+        batch.set(fs.doc(`houses/${houseId}/staff/${m.id}`), {
+          name: m.name, color: m.color, email: m.email || '',
+          active: !!m.active, createdAt: m.createdAt || new Date().toISOString(),
         });
+        // solo borramos invitaciones que sean nuestras (evita tumbar el batch)
+        const mine = async (email) => {
+          const old = await fs.doc('invites/' + email).get().catch(() => null);
+          return old && old.exists && old.data().ownerUid === user.uid ? old.ref : null;
+        };
+        if (prevEmail && prevEmail !== m.email) {
+          const ref = await mine(prevEmail);
+          if (ref) batch.delete(ref);
+        }
+        if (m.email) {
+          if (m.active) {
+            batch.set(fs.doc('invites/' + m.email), {
+              houseId, staffId: m.id, ownerUid: user.uid, name: m.name,
+            });
+          } else {
+            // archivada: se le retira el acceso
+            const ref = await mine(m.email);
+            if (ref) batch.delete(ref);
+          }
+        }
+        await batch.commit();
+      } catch (e) {
+        if (e.code === 'permission-denied' && m.email) {
+          console.error('[CasaFlow] invite', e);
+          if (typeof toast === 'function') toast(`El mail ${m.email} ya está vinculado a otra casa.`, 'err');
+          return;
+        }
+        writeErr(e);
       }
-      return batch.commit().catch(writeErr);
     },
     putRates(m) {
       return fs.doc(`houses/${houseId}/rates/${m.id}`).set({ rates: m.rates }).catch(writeErr);
