@@ -1,14 +1,16 @@
 /* =========================================================
    CasaFlow · data.js
-   Capa de datos: almacenamiento local, modelo y utilidades
-   de dominio (tarifas vigentes, días de pago, períodos).
-   Los datos viven SOLO en este dispositivo (localStorage).
+   Capa de datos: modelo en memoria (_db), adaptador de
+   almacenamiento (local o nube), tarifas vigentes, calendario
+   de pagos configurable y períodos.
    ========================================================= */
 
 'use strict';
 
 const DB_KEY = 'casaflow.db.v1';
 const SESSION_KEY = 'casaflow.session.v1';
+const ONBOARD_KEY = 'casaflow.onboarded';
+const THEME_KEY = 'casaflow.theme';
 
 /* ---------- utilidades básicas ---------- */
 
@@ -72,17 +74,127 @@ const fmtDateFull = (iso) =>
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-/* ---------- base de datos ---------- */
+const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const NTH_LABEL = { 1: '1º', 2: '2º', 3: '3º', 4: '4º', last: 'último' };
+
+/* ---------- calendario de pagos (configurable) ---------- */
+
+const DEFAULT_SCHEDULE = () => ({
+  mode: 'nthWeekday',      // 'nthWeekday' | 'monthDays' | 'weekly'
+  weekday: 5,              // 0=domingo … 6=sábado
+  nths: [2, 4],            // ocurrencias del mes: 1..4 o 'last'
+  monthDays: [15, 31],     // días fijos (31 = último día del mes)
+  extra: [],               // fechas agregadas a mano
+  skip: [],                // fechas quitadas a mano
+});
+
+function normalizeSchedule(s) {
+  const d = DEFAULT_SCHEDULE();
+  if (!s || typeof s !== 'object') return d;
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  const out = {
+    mode: ['nthWeekday', 'monthDays', 'weekly'].includes(s.mode) ? s.mode : d.mode,
+    weekday: Number.isInteger(s.weekday) && s.weekday >= 0 && s.weekday <= 6 ? s.weekday : d.weekday,
+    nths: Array.isArray(s.nths) ? s.nths.filter((n) => [1, 2, 3, 4, 'last'].includes(n)) : d.nths,
+    monthDays: Array.isArray(s.monthDays)
+      ? [...new Set(s.monthDays.filter((n) => Number.isInteger(n) && n >= 1 && n <= 31))].sort((a, b) => a - b)
+      : d.monthDays,
+    extra: Array.isArray(s.extra) ? s.extra.filter((x) => ISO.test(x)) : [],
+    skip: Array.isArray(s.skip) ? s.skip.filter((x) => ISO.test(x)) : [],
+  };
+  if (!out.nths.length) out.nths = d.nths;
+  if (!out.monthDays.length) out.monthDays = d.monthDays;
+  return out;
+}
+
+function currentSchedule() {
+  return normalizeSchedule(loadDB().settings.paySchedule);
+}
+
+/** Texto humano del calendario: "cada 2º y 4º viernes del mes" */
+function describeSchedule(s = currentSchedule()) {
+  const day = WEEKDAYS[s.weekday];
+  if (s.mode === 'weekly') return `todos los ${day.endsWith('s') ? day : day + 's'}`;
+  if (s.mode === 'monthDays') {
+    const parts = s.monthDays.map((d) => (d === 31 ? 'último día' : `día ${d}`));
+    return `los ${parts.join(' y ')} de cada mes`;
+  }
+  const nths = s.nths.map((n) => NTH_LABEL[n]);
+  return `cada ${nths.join(' y ')} ${day} del mes`;
+}
+
+function nthWeekdayOfMonth(year, m0, weekday, nth) {
+  if (nth === 'last') {
+    const last = new Date(year, m0 + 1, 0, 12);
+    const off = (last.getDay() - weekday + 7) % 7;
+    return toISO(new Date(year, m0, last.getDate() - off, 12));
+  }
+  const first = new Date(year, m0, 1, 12);
+  const off = (weekday - first.getDay() + 7) % 7;
+  return toISO(new Date(year, m0, 1 + off + (nth - 1) * 7, 12));
+}
+
+function paydaysOfYear(year, schedule = currentSchedule()) {
+  const out = new Set();
+  if (schedule.mode === 'weekly') {
+    const jan1 = new Date(year, 0, 1, 12);
+    const off = (schedule.weekday - jan1.getDay() + 7) % 7;
+    const d = new Date(year, 0, 1 + off, 12);
+    while (d.getFullYear() === year) { out.add(toISO(d)); d.setDate(d.getDate() + 7); }
+  } else {
+    for (let m = 0; m < 12; m++) {
+      if (schedule.mode === 'nthWeekday') {
+        schedule.nths.forEach((n) => out.add(nthWeekdayOfMonth(year, m, schedule.weekday, n)));
+      } else {
+        const lastDay = new Date(year, m + 1, 0).getDate();
+        schedule.monthDays.forEach((dd) => out.add(toISO(new Date(year, m, Math.min(dd, lastDay), 12))));
+      }
+    }
+  }
+  schedule.extra.filter((x) => x.startsWith(String(year))).forEach((x) => out.add(x));
+  schedule.skip.forEach((x) => out.delete(x));
+  return [...out].sort();
+}
+
+/** Todos los días de pago en un rango amplio, ordenados. */
+function paydaysAround(iso, yearsBack = 1, yearsFwd = 1) {
+  const y = fromISO(iso).getFullYear();
+  const s = currentSchedule();
+  const out = [];
+  for (let yy = y - yearsBack; yy <= y + yearsFwd; yy++) out.push(...paydaysOfYear(yy, s));
+  return out.sort();
+}
+
+function nextPayday(fromIso) {
+  return paydaysAround(fromIso).find((p) => p >= fromIso) || null;
+}
+
+function prevPayday(beforeIso) {
+  const all = paydaysAround(beforeIso).filter((p) => p < beforeIso);
+  return all.length ? all[all.length - 1] : null;
+}
+
+/** Ventana que cubre un día de pago: (pago anterior, este pago]. */
+function payWindow(payday) {
+  const prev = prevPayday(payday);
+  const fallback = currentSchedule().mode === 'weekly' ? -6 : -13;
+  return { from: prev ? addDays(prev, 1) : addDays(payday, fallback), to: payday };
+}
+
+function isManualPayday(iso) {
+  return currentSchedule().extra.includes(iso);
+}
+
+/* ---------- base de datos en memoria ---------- */
 
 const DEFAULT_DB = () => ({
   version: 1,
   settings: {
     houseName: 'Mi casa',
     ownerName: 'Organizador/a',
-    pin: btoa('1234'),          // protección liviana (ver README)
+    pin: btoa('1234'),          // solo modo local (en la nube se entra con Google)
     pinIsDefault: true,
-    theme: 'auto',
-    onboarded: false,
+    paySchedule: DEFAULT_SCHEDULE(),
   },
   staff: [],
   entries: [],
@@ -99,27 +211,60 @@ function loadDB() {
   } catch {
     _db = DEFAULT_DB();
   }
+  // migraciones suaves
+  if (!_db.settings) _db.settings = DEFAULT_DB().settings;
+  _db.settings.paySchedule = normalizeSchedule(_db.settings.paySchedule);
+  if (!Array.isArray(_db.staff)) _db.staff = [];
+  if (!Array.isArray(_db.entries)) _db.entries = [];
+  if (!Array.isArray(_db.payments)) _db.payments = [];
   return _db;
 }
 
+function setDB(db) { _db = db; }
+
 function saveDB() {
+  if (Store.mode !== 'local') return;
   localStorage.setItem(DB_KEY, JSON.stringify(_db));
 }
 
 function resetDB(withDemo) {
   _db = DEFAULT_DB();
   if (withDemo) seedDemo(_db);
-  _db.settings.onboarded = true;
+  setOnboarded(true);
   saveDB();
 }
 
-/* ---------- sesión ---------- */
+/* ---------- onboarding y tema (por dispositivo) ---------- */
+
+const isOnboarded = () => localStorage.getItem(ONBOARD_KEY) === '1';
+const setOnboarded = (v) => localStorage.setItem(ONBOARD_KEY, v ? '1' : '0');
+const getThemePref = () => localStorage.getItem(THEME_KEY) || 'auto';
+const setThemePref = (t) => localStorage.setItem(THEME_KEY, t);
+
+/* ---------- adaptador de almacenamiento ----------
+   En modo 'local' todo va a localStorage. En modo 'cloud'
+   cloud.js reemplaza estos métodos por escrituras a Firestore. */
+
+const Store = {
+  mode: 'local',
+  putSettings() { saveDB(); },
+  putStaff() { saveDB(); },
+  putRates() { saveDB(); },
+  putEntry() { saveDB(); },
+  removeEntry() { saveDB(); },
+  putPayment() { saveDB(); },
+  removePayment() { saveDB(); },
+};
+
+/* ---------- sesión (modo local) ---------- */
 
 function getSession() {
+  if (Store.mode === 'cloud') return Cloud.session();
   try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); }
   catch { return null; }
 }
 function setSession(s) {
+  if (Store.mode === 'cloud') { if (!s) Cloud.signOut(); return; }
   if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
   else sessionStorage.removeItem(SESSION_KEY);
 }
@@ -141,7 +286,7 @@ function staffById(db, id) {
 
 /** Tarifa vigente para una fecha (la última cuyo 'from' <= fecha). */
 function rateFor(staffMember, iso) {
-  if (!staffMember || !staffMember.rates.length) return 0;
+  if (!staffMember || !Array.isArray(staffMember.rates) || !staffMember.rates.length) return 0;
   const sorted = [...staffMember.rates].sort((a, b) => a.from.localeCompare(b.from));
   let value = sorted[0].value;
   for (const r of sorted) {
@@ -155,18 +300,31 @@ function currentRate(staffMember) {
   return rateFor(staffMember, todayISO());
 }
 
-function addStaff(db, { name, color, rate, rateFrom }) {
+function addStaff(db, { name, color, rate, rateFrom, email }) {
   const member = {
     id: uid(),
     name: name.trim(),
     color: color || STAFF_COLORS[db.staff.length % STAFF_COLORS.length],
+    email: (email || '').trim().toLowerCase(),
     active: true,
     rates: [{ from: rateFrom || todayISO(), value: Number(rate) || 0 }],
     createdAt: new Date().toISOString(),
   };
   db.staff.push(member);
-  saveDB();
+  Store.putStaff(member, '');
+  Store.putRates(member);
   return member;
+}
+
+function updateStaff(db, id, { name, color, email, active }) {
+  const m = staffById(db, id);
+  if (!m) return;
+  const prevEmail = m.email || '';
+  if (name !== undefined) m.name = String(name).trim();
+  if (color !== undefined) m.color = color;
+  if (email !== undefined) m.email = String(email).trim().toLowerCase();
+  if (active !== undefined) m.active = !!active;
+  Store.putStaff(m, prevEmail);
 }
 
 function addRate(db, staffId, { value, from }) {
@@ -175,7 +333,7 @@ function addRate(db, staffId, { value, from }) {
   m.rates = m.rates.filter((r) => r.from !== from); // reemplaza si misma fecha
   m.rates.push({ from, value: Number(value) || 0 });
   m.rates.sort((a, b) => a.from.localeCompare(b.from));
-  saveDB();
+  Store.putRates(m);
 }
 
 /* ---------- registros de horas ---------- */
@@ -188,7 +346,7 @@ function addEntry(db, { staffId, date, hours, note }) {
     createdAt: new Date().toISOString(),
   };
   db.entries.push(entry);
-  saveDB();
+  Store.putEntry(entry);
   return entry;
 }
 
@@ -198,12 +356,12 @@ function updateEntry(db, id, patch) {
   if (patch.date) e.date = patch.date;
   if (patch.hours !== undefined) e.hours = Math.max(0, Math.min(24, Number(patch.hours) || 0));
   if (patch.note !== undefined) e.note = String(patch.note).trim().slice(0, 200);
-  saveDB();
+  Store.putEntry(e);
 }
 
 function deleteEntry(db, id) {
   db.entries = db.entries.filter((x) => x.id !== id);
-  saveDB();
+  Store.removeEntry(id);
 }
 
 function entriesIn(db, from, to, staffId) {
@@ -224,49 +382,7 @@ function costIn(db, from, to, staffId) {
   }, 0);
 }
 
-/* ---------- días de pago (2º y 4º viernes) ---------- */
-
-function fridaysOfMonth(year, monthIdx0) {
-  const first = new Date(year, monthIdx0, 1, 12);
-  const offset = (5 - first.getDay() + 7) % 7; // 5 = viernes
-  const firstFriday = 1 + offset;
-  return {
-    second: toISO(new Date(year, monthIdx0, firstFriday + 7, 12)),
-    fourth: toISO(new Date(year, monthIdx0, firstFriday + 21, 12)),
-  };
-}
-
-function paydaysOfYear(year) {
-  const out = [];
-  for (let m = 0; m < 12; m++) {
-    const { second, fourth } = fridaysOfMonth(year, m);
-    out.push(second, fourth);
-  }
-  return out;
-}
-
-/** Todos los días de pago en un rango amplio, ordenados. */
-function paydaysAround(iso, yearsBack = 1, yearsFwd = 1) {
-  const y = fromISO(iso).getFullYear();
-  const out = [];
-  for (let yy = y - yearsBack; yy <= y + yearsFwd; yy++) out.push(...paydaysOfYear(yy));
-  return out.sort();
-}
-
-function nextPayday(fromIso) {
-  return paydaysAround(fromIso).find((p) => p >= fromIso) || null;
-}
-
-function prevPayday(beforeIso) {
-  const all = paydaysAround(beforeIso).filter((p) => p < beforeIso);
-  return all.length ? all[all.length - 1] : null;
-}
-
-/** Ventana que cubre un día de pago: (pago anterior, este pago]. */
-function payWindow(payday) {
-  const prev = prevPayday(payday);
-  return { from: prev ? addDays(prev, 1) : addDays(payday, -13), to: payday };
-}
+/* ---------- pagos ---------- */
 
 function isPaid(db, payday, staffId) {
   return db.payments.some((p) => p.payday === payday && p.staffId === staffId);
@@ -275,10 +391,40 @@ function isPaid(db, payday, staffId) {
 function togglePaid(db, payday, staffId) {
   if (isPaid(db, payday, staffId)) {
     db.payments = db.payments.filter((p) => !(p.payday === payday && p.staffId === staffId));
+    Store.removePayment(payday, staffId);
   } else {
-    db.payments.push({ payday, staffId, paidAt: new Date().toISOString() });
+    const p = { payday, staffId, paidAt: new Date().toISOString() };
+    db.payments.push(p);
+    Store.putPayment(p);
   }
-  saveDB();
+}
+
+/* ---------- calendario de pagos: edición ---------- */
+
+function saveSchedule(db, schedule) {
+  db.settings.paySchedule = normalizeSchedule(schedule);
+  Store.putSettings(db.settings);
+}
+
+function skipPayday(db, iso) {
+  const s = currentSchedule();
+  if (s.extra.includes(iso)) s.extra = s.extra.filter((x) => x !== iso);
+  else if (!s.skip.includes(iso)) s.skip.push(iso);
+  saveSchedule(db, s);
+}
+
+function restorePayday(db, iso) {
+  const s = currentSchedule();
+  s.skip = s.skip.filter((x) => x !== iso);
+  saveSchedule(db, s);
+}
+
+function addExtraPayday(db, iso) {
+  const s = currentSchedule();
+  s.skip = s.skip.filter((x) => x !== iso);
+  if (!s.extra.includes(iso)) s.extra.push(iso);
+  s.extra.sort();
+  saveSchedule(db, s);
 }
 
 /* ---------- períodos con nombre ---------- */
@@ -335,7 +481,8 @@ function exportJSON(db) {
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
-function importJSON(text) {
+/** Valida y normaliza un backup. Devuelve un db limpio (no lo aplica). */
+function parseBackup(text) {
   let data;
   try { data = JSON.parse(text); } catch { data = null; }
   if (!data || typeof data !== 'object' || data.version !== 1) {
@@ -353,6 +500,7 @@ function importJSON(text) {
       id: s.id,
       name: s.name.trim().slice(0, 40) || 'Sin nombre',
       color: COLOR_RE.test(s.color) ? s.color : STAFF_COLORS[0],
+      email: typeof s.email === 'string' ? s.email.trim().toLowerCase().slice(0, 120) : '',
       active: s.active !== false,
       rates: [...s.rates]
         .map((r) => ({ from: r.from, value: Math.max(0, r.value) }))
@@ -388,11 +536,15 @@ function importJSON(text) {
     ownerName: typeof s.ownerName === 'string' ? s.ownerName.slice(0, 40) : base.settings.ownerName,
     pin: typeof s.pin === 'string' && s.pin ? s.pin : base.settings.pin,
     pinIsDefault: s.pinIsDefault !== false,
-    theme: ['auto', 'light', 'dark'].includes(s.theme) ? s.theme : 'auto',
-    onboarded: true,
+    paySchedule: normalizeSchedule(s.paySchedule),
   };
 
-  _db = { version: 1, settings, staff, entries, payments };
+  return { version: 1, settings, staff, entries, payments };
+}
+
+function importJSON(text) {
+  _db = parseBackup(text);
+  setOnboarded(true);
   saveDB();
 }
 
@@ -415,7 +567,9 @@ function seedDemo(db) {
   }
 
   // Pagos pasados marcados como hechos (el más reciente queda a medias, para mostrar el flujo)
-  const past = paydaysAround(todayISO())
+  const sched = normalizeSchedule(db.settings.paySchedule);
+  const y = fromISO(todayISO()).getFullYear();
+  const past = [...paydaysOfYear(y - 1, sched), ...paydaysOfYear(y, sched)]
     .filter((p) => p < todayISO() && p >= addDays(todayISO(), -130));
   past.forEach((payday, idx) => {
     const team = [marta.id, sol.id, paula.id];
@@ -426,7 +580,7 @@ function seedDemo(db) {
 
 function addStaffRaw(db, name, color, rate) {
   const m = {
-    id: uid(), name, color, active: true,
+    id: uid(), name, color, email: '', active: true,
     rates: [{ from: addDays(todayISO(), -365), value: rate }],
     createdAt: new Date().toISOString(),
   };

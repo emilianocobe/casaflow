@@ -102,20 +102,30 @@ function go(hash) { location.hash = hash; }
 
 function route() {
   const db = loadDB();
-  const s = getSession();
   const h = location.hash || '#/';
 
-  if (!db.settings.onboarded) return renderOnboarding();
+  if (!isOnboarded()) return renderOnboarding();
 
+  if (Cloud.enabled) {
+    const st = Cloud.state;
+    if (st === 'init' || st === 'loading') return renderLoading();
+    if (st === 'anon') return renderLogin(db);
+    if (st === 'noaccess') return renderNoAccess();
+    if (st === 'error') return renderError();
+  }
+
+  const s = getSession();
   if (h.startsWith('#/c')) {
-    if (!s || s.role !== 'collab') return go('#/');
+    if (!s || s.role !== 'collab') return go(s && s.role === 'org' ? '#/o/tablero' : '#/');
     return renderCollab(db, s);
   }
   if (h.startsWith('#/o')) {
-    if (!s || s.role !== 'org') return go('#/');
+    if (!s || s.role !== 'org') return go(s && s.role === 'collab' ? '#/c' : '#/');
     const sub = h.split('/')[2] || 'tablero';
     return renderOrg(db, sub);
   }
+  // En la nube, con sesión resuelta, la raíz lleva directo a la vista del rol
+  if (Cloud.enabled && s) return go(s.role === 'org' ? '#/o/tablero' : '#/c');
   return renderLogin(db);
 }
 
@@ -157,7 +167,12 @@ function renderOnboarding() {
       title: 'Para quien organiza',
       body: 'Tablero con gráficos, liquidación por semana, quincena o mes, tarifas con historial y control de pagos cada 2º y 4º viernes. Todo calculado automáticamente.',
     },
-    {
+    Cloud.enabled ? {
+      icon: 'shield',
+      title: 'Cada una ve solo lo suyo',
+      body: 'Se entra con la cuenta de Google. Quien organiza ve todo; cada colaboradora ve únicamente sus horas y el estado de sus pagos, desde su propio celular.',
+      last: true,
+    } : {
       icon: 'shield',
       title: 'Tus datos, en tu dispositivo',
       body: 'CasaFlow no envía nada a ningún servidor: la información vive solo acá. Podés exportar un respaldo cuando quieras. ¿Cómo querés empezar?',
@@ -173,12 +188,16 @@ function renderOnboarding() {
       <p class="ob-body">${esc(s.body)}</p>
       <div class="ob-dots">${slides.map((_, i) =>
         `<span class="ob-dot ${i === obSlide ? 'on' : ''}"></span>`).join('')}</div>
-      ${s.last ? `
+      ${s.last ? (Cloud.enabled ? `
+        <div class="ob-actions">
+          <button class="btn btn-primary btn-big" data-action="ob-cloud">${icon('key')} Entrar con Google</button>
+          <button class="btn btn-ghost" data-action="ob-back">Volver</button>
+        </div>` : `
         <div class="ob-actions">
           <button class="btn btn-primary btn-big" data-action="ob-demo">${icon('sparkle')} Probar con datos de ejemplo</button>
           <button class="btn btn-ghost btn-big" data-action="ob-fresh">Empezar de cero con mi equipo</button>
           <button class="btn btn-ghost" data-action="ob-back">Volver</button>
-        </div>` : `
+        </div>`) : `
         <div class="ob-actions">
           <button class="btn btn-primary btn-big" data-action="ob-next">Continuar ${icon('arrow-right')}</button>
           ${obSlide > 0 ? '<button class="btn btn-ghost" data-action="ob-back">Volver</button>' : ''}
@@ -189,7 +208,85 @@ function renderOnboarding() {
 
 /* ================= ingreso ================= */
 
+/* ---- pantallas de nube ---- */
+
+function renderLoading() {
+  $app().innerHTML = `
+  ${topbar(loadDB())}
+  <main class="wrap view-enter">
+    <section class="login-hero">
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="muted">Conectando con tu casa…</p>
+    </section>
+  </main>`;
+}
+
+function renderCloudLogin(db) {
+  $app().innerHTML = `
+  ${topbar(db)}
+  <main class="wrap view-enter">
+    <section class="login-hero">
+      <h1 class="display">Hola 👋</h1>
+      <p class="muted">Entrá con tu cuenta de Google. Cada persona ve solo lo suyo.</p>
+    </section>
+    <section class="login-grid login-grid-one">
+      <button class="login-card" data-action="cloud-signin">
+        <span class="avatar avatar-org">${icon('key')}</span>
+        <span class="login-name">Entrar con Google</span>
+        <span class="login-role">Colaboradoras y organizador/a</span>
+      </button>
+    </section>
+    <footer class="foot-note">${icon('shield')} Tus horas y pagos quedan protegidos en tu cuenta.</footer>
+  </main>`;
+}
+
+function renderNoAccess() {
+  const u = Cloud.user || {};
+  $app().innerHTML = `
+  ${topbar(loadDB(), { showLogout: true })}
+  <main class="wrap view-enter">
+    <section class="login-hero">
+      <h1 class="display-sm">Todavía no estás en ninguna casa</h1>
+      <p class="muted">Entraste como <b>${esc(u.email || '')}</b>.</p>
+    </section>
+    <section class="card">
+      <h2 class="card-title">${icon('users')} ¿Sos colaboradora?</h2>
+      <p class="muted">Pedile a quien organiza la casa que te agregue al equipo con este mail:
+        <b>${esc(u.email || '')}</b>. Apenas lo haga, volvé a entrar y vas a ver tu pantalla.</p>
+    </section>
+    <section class="card card-accent">
+      <h2 class="card-title">${icon('home')} ¿Organizás una casa?</h2>
+      <p class="muted">Creá tu casa y después agregá a tu equipo con sus mails.</p>
+      <form data-action-submit="house-create" class="form-grid">
+        <label class="field"><span>Nombre de la casa</span>
+          <input class="input" name="houseName" maxlength="40" required placeholder="Ej: Casa de la familia">
+        </label>
+        <label class="field"><span>Tu nombre</span>
+          <input class="input" name="ownerName" maxlength="40" value="${esc(u.displayName || '')}" placeholder="Tu nombre">
+        </label>
+        <button class="btn btn-primary" type="submit">Crear mi casa</button>
+      </form>
+    </section>
+  </main>`;
+}
+
+function renderError() {
+  $app().innerHTML = `
+  ${topbar(loadDB(), { showLogout: true })}
+  <main class="wrap view-enter">
+    <section class="card card-danger">
+      <h2 class="card-title">${icon('alert')} Algo no salió bien</h2>
+      <p class="muted">${esc(Cloud.error || 'Error desconocido.')}</p>
+      <div class="btn-row">
+        <button class="btn" data-action="reload">Reintentar</button>
+        <button class="btn btn-ghost" data-action="logout">Salir</button>
+      </div>
+    </section>
+  </main>`;
+}
+
 function renderLogin(db) {
+  if (Cloud.enabled) return renderCloudLogin(db);
   const staff = activeStaff(db);
   const cards = staff.map((m) => `
     <button class="login-card" data-action="login-collab" data-id="${m.id}">
@@ -281,6 +378,18 @@ function renderCollab(db, session) {
   const insight = collabInsight(db, me);
   const quote = QUOTES[dayOfYear() % QUOTES.length];
 
+  // últimas cargas propias (con opción de borrar un error)
+  const recent = [...db.entries.filter((e) => e.staffId === me.id)]
+    .sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 6)
+    .map((e) => `
+      <li class="recent-item">
+        <span class="recent-date">${esc(cap(fmtDateShort(e.date)))}</span>
+        <b>${fmtNum(e.hours)} h</b>
+        <span class="recent-note">${e.note ? esc(e.note) : ''}</span>
+        <button class="iconbtn" data-action="my-entry-del" data-id="${e.id}" aria-label="Borrar esta carga">${icon('trash')}</button>
+      </li>`).join('');
+
   $app().innerHTML = `
   ${topbar(db, { showLogout: true, subtitle: `Hola, ${me.name}` })}
   <main class="wrap view-enter">
@@ -341,8 +450,13 @@ function renderCollab(db, session) {
     </section>
 
     <section class="card">
+      <h2 class="card-title">${icon('list')} Mis últimas cargas</h2>
+      ${recent ? `<ul class="recent-list">${recent}</ul>` : '<p class="muted">Todavía no cargaste horas.</p>'}
+    </section>
+
+    <section class="card">
       <h2 class="card-title">${icon('money')} Mis pagos</h2>
-      <p class="hint">Los pagos son cada 2º y 4º viernes del mes.</p>
+      <p class="hint">Los pagos son ${esc(describeSchedule())}.</p>
       <ul class="timeline">${payRows}</ul>
     </section>
 
@@ -496,7 +610,7 @@ function orgDashboard(db) {
   const insight = orgInsight(db, staff, r);
   const question = TRIGGERS[dayOfYear() % TRIGGERS.length];
 
-  const pinBanner = db.settings.pinIsDefault ? `
+  const pinBanner = Store.mode === 'local' && db.settings.pinIsDefault ? `
     <div class="banner-warn" role="note">
       ${icon('key')} Estás usando el PIN inicial (1234). <a class="link" href="#/o/ajustes">Cambialo en Ajustes</a> para que solo vos veas los montos.
     </div>` : '';
@@ -718,9 +832,12 @@ function orgPagos(db) {
           <span class="tl-dot"></span>
           <span class="tl-date">${esc(cap(fmtDateLong(p)))}</span>
           ${isNext ? '<span class="chip chip-accent">Próximo</span>' : ''}
+          ${isManualPayday(p) ? '<span class="chip chip-soft">Agregado a mano</span>' : ''}
           ${allPaid ? `<span class="chip chip-ok">${icon('check')} Completo</span>`
             : isLate ? '<span class="chip chip-warn">Pendiente</span>'
             : p < t && noWork ? '<span class="chip chip-soft">Sin horas registradas</span>' : ''}
+          <button class="iconbtn pay-remove" data-action="payday-skip" data-payday="${p}"
+            title="Quitar esta fecha de pago" aria-label="Quitar esta fecha de pago">${icon('x')}</button>
         </div>
         <p class="hint">Cubre del ${fmtDateShort(w.from)} al ${fmtDateShort(w.to)}</p>
         <div class="paychips">${chips || '<span class="muted">Sin equipo activo.</span>'}</div>
@@ -730,7 +847,11 @@ function orgPagos(db) {
   return `
     <section class="page-head">
       <h1 class="display-sm">Pagos</h1>
-      <p class="muted">Cada <b>2º</b> y <b>4º viernes</b> del mes. Tocá una persona para marcar su pago.</p>
+      <p class="muted">Se paga <b>${esc(describeSchedule())}</b>. Tocá una persona para marcar su pago.
+        <a class="link" href="#/o/ajustes">Cambiar calendario</a></p>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn-ghost" data-action="payday-add">${icon('plus')} Agregar una fecha de pago</button>
+      </div>
       <div class="year-nav">
         <button class="iconbtn" data-action="pay-year" data-d="-1" aria-label="Año anterior">${icon('arrow-left')}</button>
         <span class="month-label">${view.payYear}</span>
@@ -754,6 +875,9 @@ function orgEquipo(db) {
           <span class="avatar" style="--c:${esc(m.color)}">${esc(initials(m.name))}</span>
           <div><h3>${esc(m.name)}</h3>
             <p class="hint">${m.active ? 'Activa' : 'Archivada'} · Tarifa actual: <b>${fmtMoney(rate)}</b>/h</p>
+            ${m.email
+              ? `<p class="hint">${icon('key')} ${esc(m.email)}</p>`
+              : Store.mode === 'cloud' ? '<p class="hint banner-inline">Sin email: todavía no puede entrar desde su celular</p>' : ''}
           </div>
         </div>
         <details class="rate-history"><summary>Historial de tarifas</summary><ul>${history}</ul></details>
@@ -790,6 +914,11 @@ function staffFormModal(db, member) {
     <form data-action-submit="staff-save" ${member ? `data-id="${member.id}"` : ''}>
       <label class="field"><span>Nombre</span>
         <input class="input" name="name" required maxlength="40" value="${member ? esc(member.name) : ''}" placeholder="Ej: Carmen">
+      </label>
+      <label class="field"><span>Email (cuenta de Google)${Store.mode === 'cloud' ? '' : ' · opcional'}</span>
+        <input class="input" name="email" type="email" maxlength="120"
+          value="${member ? esc(member.email || '') : ''}" placeholder="nombre@gmail.com">
+        ${Store.mode === 'cloud' ? '<small class="hint">Con este mail va a poder entrar desde su celular y ver solo lo suyo.</small>' : ''}
       </label>
       <div class="field"><span>Color</span><div class="color-row">${colors}</div></div>
       ${isNew ? `
@@ -913,9 +1042,66 @@ function entryModal(db, entry) {
 
 /* ---- ajustes ---- */
 
-function orgAjustes(db) {
+function scheduleCard(db) {
+  const s = currentSchedule();
+  const wdOpts = [1, 2, 3, 4, 5, 6, 0].map((d) =>
+    `<option value="${d}" ${s.weekday === d ? 'selected' : ''}>${cap(WEEKDAYS[d])}</option>`).join('');
+  const nthBoxes = [1, 2, 3, 4, 'last'].map((n) => `
+    <label class="check"><input type="checkbox" name="nths" value="${n}" ${s.nths.includes(n) ? 'checked' : ''}>
+      <span>${NTH_LABEL[n]}</span></label>`).join('');
+  const md = s.monthDays.filter((d) => d !== 31);
+  const skipped = s.skip.slice().sort().map((d) => `
+    <li><span>${esc(cap(fmtDateLong(d)))} ${d.slice(0, 4)}</span>
+      <button class="btn btn-mini" data-action="payday-restore" data-payday="${d}">Restaurar</button></li>`).join('');
+
   return `
-    <section class="page-head"><h1 class="display-sm">Ajustes</h1></section>
+    <section class="card card-accent">
+      <h2 class="card-title">${icon('calendar')} Días de pago</h2>
+      <p class="hint">Hoy: <b>${esc(describeSchedule(s))}</b>. Cambiá el esquema cuando quieras; los pagos ya marcados se conservan.</p>
+      <form data-action-submit="schedule-save" class="schedule-form">
+        <div class="field"><span>Esquema</span>
+          <div class="radio-col">
+            <label class="check"><input type="radio" name="mode" value="nthWeekday" ${s.mode === 'nthWeekday' ? 'checked' : ''}>
+              <span>Ciertas semanas del mes (ej: 2º y 4º viernes)</span></label>
+            <label class="check"><input type="radio" name="mode" value="monthDays" ${s.mode === 'monthDays' ? 'checked' : ''}>
+              <span>Días fijos del mes (ej: 15 y último)</span></label>
+            <label class="check"><input type="radio" name="mode" value="weekly" ${s.mode === 'weekly' ? 'checked' : ''}>
+              <span>Todas las semanas, un día fijo</span></label>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Día de la semana</span>
+            <select class="input" name="weekday">${wdOpts}</select>
+            <small class="hint">Se usa en los esquemas por semana.</small>
+          </label>
+          <div class="field"><span>Qué semanas del mes</span>
+            <div class="check-row">${nthBoxes}</div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Día fijo 1</span>
+            <input class="input" name="md1" type="number" min="1" max="30" value="${md[0] || ''}" placeholder="15"></label>
+          <label class="field"><span>Día fijo 2</span>
+            <input class="input" name="md2" type="number" min="1" max="30" value="${md[1] || ''}" placeholder="30"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="mdLast" ${s.monthDays.includes(31) ? 'checked' : ''}>
+          <span>Incluir el último día de cada mes</span></label>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" type="submit">Guardar calendario</button>
+          <a class="btn btn-ghost" href="#/o/pagos">Ver los pagos del año</a>
+        </div>
+      </form>
+      ${skipped ? `<details class="rate-history"><summary>Fechas quitadas a mano (${s.skip.length})</summary>
+        <ul class="skip-list">${skipped}</ul></details>` : ''}
+    </section>`;
+}
+
+function orgAjustes(db) {
+  const local = Store.mode === 'local';
+  return `
+    <section class="page-head"><h1 class="display-sm">Ajustes</h1>
+      ${Cloud.enabled ? `<p class="hint">${icon('shield')} Conectado como <b>${esc((Cloud.user && Cloud.user.email) || '')}</b> · los datos se sincronizan en la nube.</p>` : ''}
+    </section>
 
     <section class="card">
       <h2 class="card-title">${icon('home')} La casa</h2>
@@ -928,6 +1114,9 @@ function orgAjustes(db) {
       </form>
     </section>
 
+    ${scheduleCard(db)}
+
+    ${local ? `
     <section class="card">
       <h2 class="card-title">${icon('key')} PIN de acceso</h2>
       <p class="hint">Protege la vista de organización en este dispositivo. No es una contraseña fuerte: es una traba amable para uso hogareño.</p>
@@ -938,29 +1127,32 @@ function orgAjustes(db) {
           <input class="input" name="newPin" type="password" inputmode="numeric" minlength="4" maxlength="8" required></label>
         <button class="btn btn-primary" type="submit">Cambiar PIN</button>
       </form>
-    </section>
+    </section>` : ''}
 
     <section class="card">
       <h2 class="card-title">${icon('download')} Respaldo</h2>
-      <p class="hint">Los datos viven solo en este dispositivo. Exportá un archivo de respaldo cada tanto.</p>
+      <p class="hint">${local
+        ? 'Los datos viven solo en este dispositivo. Exportá un archivo de respaldo cada tanto.'
+        : 'Descargá una copia de todos los datos de la casa cuando quieras.'}</p>
       <div class="btn-row">
         <button class="btn" data-action="export">${icon('download')} Exportar datos</button>
-        <label class="btn btn-ghost">
+        ${local ? `<label class="btn btn-ghost">
           ${icon('upload')} Importar respaldo
           <input type="file" accept="application/json" class="sr-only" data-action-change="import">
-        </label>
+        </label>` : ''}
       </div>
     </section>
 
+    ${local ? `
     <section class="card card-danger">
       <h2 class="card-title">${icon('alert')} Zona delicada</h2>
       <div class="btn-row">
         <button class="btn btn-ghost" data-action="reset-demo">Reiniciar con datos de ejemplo</button>
         <button class="btn btn-danger" data-action="reset-all">Borrar todo</button>
       </div>
-    </section>
+    </section>` : ''}
 
-    <p class="foot-note">${icon('shield')} CasaFlow v1 · código abierto · tus datos no salen de este dispositivo.</p>`;
+    <p class="foot-note">${icon('shield')} CasaFlow v2 · código abierto · ${local ? 'tus datos no salen de este dispositivo.' : 'cada persona ve solo lo suyo.'}</p>`;
 }
 
 /* ================= glosario ================= */
@@ -969,7 +1161,7 @@ const GLOSSARY = [
   { icon: 'money',    term: 'Liquidación',   def: 'El cálculo de cuánto corresponde pagar: horas trabajadas × tarifa vigente, en un período.' },
   { icon: 'calendar', term: 'Quincena',      def: 'Mitades del mes: del 1 al 15 (quincena 1) y del 16 a fin de mes (quincena 2).' },
   { icon: 'clock',    term: 'Tarifa vigente', def: 'El valor por hora que aplica en una fecha. Si hubo aumentos, cada día usa el valor que correspondía.' },
-  { icon: 'check',    term: 'Día de pago',   def: 'En esta casa: el 2º y el 4º viernes de cada mes.' },
+  { icon: 'check',    term: 'Día de pago',   def: null },
   { icon: 'chart',    term: 'Mapa de calor', def: 'Calendario donde cada día se pinta más intenso cuantas más horas se registraron.' },
   { icon: 'download', term: 'Respaldo',      def: 'Archivo con todos tus datos, para guardar o pasar a otro dispositivo.' },
 ];
@@ -978,7 +1170,7 @@ function glossaryModal() {
   const items = GLOSSARY.map((g) => `
     <li class="gloss-item">
       <span class="gloss-icon">${icon(g.icon)}</span>
-      <div><b>${esc(g.term)}</b><p>${esc(g.def)}</p></div>
+      <div><b>${esc(g.term)}</b><p>${esc(g.def || 'En esta casa: ' + describeSchedule() + '.')}</p></div>
     </li>`).join('');
   openModal(`<h3>${icon('book')} Glosario visual</h3><ul class="gloss-list">${items}</ul>`, { wide: true });
 }
@@ -986,18 +1178,15 @@ function glossaryModal() {
 /* ================= temas ================= */
 
 function applyTheme() {
-  const db = loadDB();
-  const t = db.settings.theme;
+  const t = getThemePref();
   const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 }
 
 function cycleTheme() {
-  const db = loadDB();
   const order = ['auto', 'light', 'dark'];
-  const next = order[(order.indexOf(db.settings.theme) + 1) % order.length];
-  db.settings.theme = next;
-  saveDB();
+  const next = order[(order.indexOf(getThemePref()) + 1) % order.length];
+  setThemePref(next);
   applyTheme();
   toast(`Tema: ${next === 'auto' ? 'automático' : next === 'light' ? 'claro' : 'oscuro'}`);
 }
@@ -1015,6 +1204,47 @@ document.addEventListener('click', (ev) => {
     case 'glossary': glossaryModal(); break;
     case 'theme': cycleTheme(); break;
     case 'logout': setSession(null); go('#/'); break;
+    case 'reload': location.reload(); break;
+
+    /* nube */
+    case 'ob-cloud': setOnboarded(true); Cloud.signIn().catch((e) => toast('No se pudo entrar (' + (e.code || e.message) + ')', 'err')); route(); break;
+    case 'cloud-signin': Cloud.signIn().catch((e) => toast('No se pudo entrar (' + (e.code || e.message) + ')', 'err')); break;
+
+    /* calendario de pagos */
+    case 'payday-skip':
+      confirmModal('¿Quitar esta fecha de pago?',
+        `El <b>${esc(cap(fmtDateLong(el.dataset.payday)))}</b> dejará de figurar como día de pago. Podés restaurarla desde Ajustes.`,
+        'Quitar', `data-action="payday-skip-confirm" data-payday="${el.dataset.payday}"`);
+      break;
+    case 'payday-skip-confirm':
+      skipPayday(db, el.dataset.payday); closeModal(); toast('Fecha quitada'); route(); break;
+    case 'payday-restore':
+      restorePayday(db, el.dataset.payday); toast('Fecha restaurada'); route(); break;
+    case 'payday-add':
+      openModal(`
+        <h3>Agregar una fecha de pago</h3>
+        <p class="muted">Para un pago fuera del calendario habitual (adelanto, feriado, aguinaldo…).</p>
+        <form data-action-submit="payday-add-submit">
+          <label class="field"><span>Fecha</span>
+            <input class="input" name="date" type="date" required value="${todayISO()}"></label>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-action="modal-close">Cancelar</button>
+            <button type="submit" class="btn btn-primary">Agregar</button>
+          </div>
+        </form>`);
+      break;
+
+    /* colaboradora: borrar una carga propia */
+    case 'my-entry-del':
+      confirmModal('¿Borrar esta carga?', 'Si fue un error, borrala y volvé a cargar las horas correctas.',
+        'Borrar', `data-action="my-entry-del-confirm" data-id="${el.dataset.id}"`);
+      break;
+    case 'my-entry-del-confirm': {
+      const s = getSession();
+      const e = db.entries.find((x) => x.id === el.dataset.id);
+      if (e && s && e.staffId === s.staffId) { deleteEntry(db, e.id); toast('Carga borrada'); }
+      closeModal(); route(); break;
+    }
 
     /* onboarding */
     case 'ob-next': obSlide++; renderOnboarding(); break;
@@ -1072,7 +1302,7 @@ document.addEventListener('click', (ev) => {
     case 'rate-new': rateModal(db, staffById(db, el.dataset.id)); break;
     case 'staff-toggle': {
       const m = staffById(db, el.dataset.id);
-      m.active = !m.active; saveDB();
+      updateStaff(db, m.id, { active: !m.active });
       toast(m.active ? `${m.name} restaurada` : `${m.name} archivada`);
       route(); break;
     }
@@ -1185,14 +1415,14 @@ document.addEventListener('submit', (ev) => {
       const rawColor = String(fd.get('color') || '');
       const pickedColor = STAFF_COLORS.includes(rawColor) || COLOR_RE.test(rawColor)
         ? rawColor : STAFF_COLORS[0];
+      const email = String(fd.get('email') || '').trim().toLowerCase();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('El email no parece válido', 'err'); return; }
       if (id) {
-        const m = staffById(db, id);
-        m.name = String(fd.get('name')).trim();
-        m.color = pickedColor;
-        saveDB(); toast('Equipo actualizado');
+        updateStaff(db, id, { name: String(fd.get('name')), color: pickedColor, email });
+        toast('Equipo actualizado');
       } else {
         addStaff(db, {
-          name: String(fd.get('name')), color: pickedColor,
+          name: String(fd.get('name')), color: pickedColor, email,
           rate: Number(fd.get('rate')), rateFrom: String(fd.get('rateFrom') || todayISO()),
         });
         toast('¡Bienvenida al equipo! 🎉');
@@ -1210,7 +1440,37 @@ document.addEventListener('submit', (ev) => {
     case 'settings-save': {
       db.settings.houseName = String(fd.get('houseName')).trim() || 'Mi casa';
       db.settings.ownerName = String(fd.get('ownerName')).trim() || 'Organizador/a';
-      saveDB(); toast('Guardado'); route();
+      Store.putSettings(db.settings); toast('Guardado'); route();
+      break;
+    }
+    case 'schedule-save': {
+      const nths = fd.getAll('nths').map((n) => (n === 'last' ? 'last' : Number(n)));
+      const monthDays = [Number(fd.get('md1')), Number(fd.get('md2'))]
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
+      if (fd.get('mdLast')) monthDays.push(31);
+      const schedule = {
+        ...currentSchedule(),
+        mode: String(fd.get('mode')),
+        weekday: Number(fd.get('weekday')),
+        nths: nths.length ? nths : currentSchedule().nths,
+        monthDays: monthDays.length ? monthDays : currentSchedule().monthDays,
+      };
+      saveSchedule(db, schedule);
+      toast('Calendario de pagos guardado ✔'); route();
+      break;
+    }
+    case 'payday-add-submit': {
+      const iso = String(fd.get('date') || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) { toast('Elegí una fecha', 'err'); return; }
+      addExtraPayday(db, iso); closeModal();
+      toast(`Fecha de pago agregada: ${fmtDateShort(iso)}`); route();
+      break;
+    }
+    case 'house-create': {
+      const btn = form.querySelector('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Creando…'; }
+      Cloud.createHouse(String(fd.get('houseName')).trim(), String(fd.get('ownerName')).trim())
+        .catch((e) => { toast('No se pudo crear la casa (' + (e.code || e.message) + ')', 'err'); route(); });
       break;
     }
     case 'pin-change': {
@@ -1250,4 +1510,5 @@ window.addEventListener('hashchange', route);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
 applyTheme();
+Cloud.init();   // activa la nube solo si hay configuración
 route();

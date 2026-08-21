@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// CasaFlow · reglas de seguridad de Firestore
+// - El/la dueño/a de una casa (ownerUid) ve y edita todo lo de su casa.
+// - Una colaboradora (invitada por email) solo ve/crea SUS horas y ve SUS pagos.
+//   Nunca puede leer tarifas ni datos de otras personas.
+
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myEmail() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
+    function invite() {
+      return get(/databases/$(db)/documents/invites/$(myEmail()));
+    }
+
+    function hasInvite() {
+      return myEmail() != '' && exists(/databases/$(db)/documents/invites/$(myEmail()));
+    }
+
+    function houseDoc(houseId) {
+      return get(/databases/$(db)/documents/houses/$(houseId));
+    }
+
+    function isOwner(houseId) {
+      return signedIn() && houseDoc(houseId).data.ownerUid == request.auth.uid;
+    }
+
+    function isMember(houseId) {
+      return signedIn() && hasInvite() && invite().data.houseId == houseId;
+    }
+
+    function myStaffId() {
+      return invite().data.staffId;
+    }
+
+    // ---- invitaciones: las crea el dueño; cada mail lee solo la suya
+    match /invites/{email} {
+      allow read: if signedIn() && myEmail() == email;
+      allow create, update: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // ---- casas
+    match /houses/{houseId} {
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid || isMember(houseId));
+      allow update: if isOwner(houseId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isOwner(houseId);
+
+      match /staff/{staffId} {
+        allow read: if isOwner(houseId) || isMember(houseId);
+        allow write: if isOwner(houseId);
+      }
+
+      match /rates/{staffId} {
+        allow read, write: if isOwner(houseId);
+      }
+
+      match /entries/{entryId} {
+        allow read: if isOwner(houseId)
+          || (isMember(houseId) && resource.data.staffId == myStaffId());
+        allow create: if isOwner(houseId)
+          || (isMember(houseId)
+              && request.resource.data.staffId == myStaffId()
+              && request.resource.data.hours is number
+              && request.resource.data.hours >= 0
+              && request.resource.data.hours <= 24);
+        allow update, delete: if isOwner(houseId)
+          || (isMember(houseId) && resource.data.staffId == myStaffId());
+      }
+
+      match /payments/{paymentId} {
+        allow read: if isOwner(houseId)
+          || (isMember(houseId) && resource.data.staffId == myStaffId());
+        allow write: if isOwner(houseId);
+      }
+    }
+  }
+}

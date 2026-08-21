@@ -27,12 +27,37 @@ Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor
 | | Equipo editable: altas, archivo, colores |
 | | Registros filtrables, exportación y respaldo |
 
+## ☁️ Dos modos de uso
+
+| Modo local (sin configurar nada) | Modo nube (v2) |
+|---|---|
+| Los datos viven solo en el dispositivo (ideal: una tablet compartida en casa) | Cada colaboradora entra **desde su propio celular** con su cuenta de Google |
+| Perfiles sin contraseña + PIN local para quien organiza | Quien organiza ve todo desde cualquier dispositivo; **cada persona ve solo lo suyo**, garantizado por reglas de seguridad |
+| Respaldo JSON exportable/importable | Sincronización instantánea; respaldo exportable |
+
+### Activar el modo nube (gratis, ~10 minutos)
+
+1. Entrá a [console.firebase.google.com](https://console.firebase.google.com) con tu cuenta de Google → **Crear proyecto** (el plan gratuito alcanza de sobra para una casa).
+2. En el proyecto: **Authentication → Comenzar → Google → Habilitar** (elegí tu mail de soporte) → Guardar.
+3. **Authentication → Settings → Dominios autorizados → Agregar dominio**: `TU-USUARIO.github.io` (el dominio donde vive la app).
+4. **Firestore Database → Crear base de datos → modo producción** → elegí una región cercana.
+5. En Firestore, pestaña **Reglas**: pegá el contenido de [`firestore.rules`](firestore.rules) y publicá.
+6. **Configuración del proyecto (⚙️) → Tus apps → Web (`</>`)** → registrá la app → copiá el objeto `firebaseConfig`.
+7. Pegalo en [`js/firebase-config.js`](js/firebase-config.js) como `window.CASAFLOW_FIREBASE = { ... }` y subí el cambio.
+
+Listo: la app pasa sola a modo nube. Quien entra primero crea su casa; después agrega a cada colaboradora con su **email de Google** desde *Equipo*, y ellas entran con ese mail.
+
+> Las claves de `firebaseConfig` son públicas por diseño (identifican el proyecto, no dan acceso). La protección real está en `firestore.rules`: el dueño de cada casa ve y edita todo lo suyo; una colaboradora solo puede crear/ver **sus** horas y ver **sus** pagos — nunca tarifas ni datos de otras personas.
+
 ## 🔒 Privacidad primero
 
-- **Los datos viven solo en tu dispositivo** (localStorage del navegador). Nada se envía a ningún servidor.
-- El código es público; **tus datos no**. La demo trae un equipo ficticio.
-- La vista de organización se protege con un **PIN local** (traba amable para uso hogareño, no un sistema de seguridad bancario — honestidad ante todo).
+- En modo local, **nada sale del dispositivo**. En modo nube, los datos viven en **tu** proyecto de Firebase, bajo tu cuenta.
+- El código es público; **tus datos no**. La demo trae un equipo ficticio (`?demo` en la URL fuerza el modo local de demostración).
 - Exportá un **respaldo JSON** cuando quieras desde Ajustes.
+
+## 📅 Días de pago a tu medida
+
+Desde *Ajustes → Días de pago* elegís el esquema: **ciertas semanas del mes** (2º y 4º viernes, 1º y 3º sábado, último viernes…), **días fijos** (15 y último día) o **semanal**. Y en *Pagos* podés **quitar una fecha** puntual o **agregar una a mano** (adelanto, feriado, aguinaldo).
 
 ## 🚀 Probarla
 
@@ -55,20 +80,23 @@ cd casaflow
 
 ```
 casaflow/
-├── index.html        # estructura + sprite de iconos SVG
-├── css/styles.css    # sistema de diseño completo
+├── index.html            # estructura + sprite de iconos SVG
+├── firestore.rules       # reglas de seguridad (modo nube)
+├── css/styles.css        # sistema de diseño completo
 └── js/
-    ├── data.js       # modelo, storage, tarifas vigentes, días de pago
-    ├── charts.js     # gráficos SVG sin dependencias
-    └── app.js        # rutas, vistas, interacciones
+    ├── firebase-config.js  # configuración de la nube (opcional)
+    ├── data.js             # modelo, adaptador local/nube, tarifas, calendario de pagos
+    ├── charts.js           # gráficos SVG sin dependencias
+    ├── cloud.js            # Firebase: ingreso con Google + sincronización
+    └── app.js              # rutas, vistas, interacciones
 ```
 
 ## 🗺️ Mapa de ruta
 
 - [x] ▓▓▓▓▓▓▓▓▓▓ **v1** — Perfiles, carga de horas, tablero, liquidación, pagos, tarifas con vigencia, respaldo
-- [ ] ░░░░░░░░░░ **v1.1** — Instalable como app (PWA) y uso 100% offline
-- [ ] ░░░░░░░░░░ **v1.2** — Recordatorios de día de pago
-- [ ] ░░░░░░░░░░ **v2** — Sincronización multi-dispositivo opcional (backend)
+- [x] ▓▓▓▓▓▓▓▓▓▓ **v2** — Sincronización en la nube (cuentas Google, cada una desde su celular) + calendario de pagos configurable
+- [ ] ░░░░░░░░░░ **v2.1** — Instalable como app (PWA) y uso offline
+- [ ] ░░░░░░░░░░ **v2.2** — Recordatorios de día de pago
 
 ## 📚 Glosario
 

@@ -577,6 +577,45 @@ img, svg { vertical-align: middle; }
 }
 .gloss-item p { margin: 3px 0 0; color: var(--ink-soft); font-size: 0.88rem; line-height: 1.5; }
 
+/* ---------- nube: carga, acceso ---------- */
+
+.spinner {
+  width: 42px; height: 42px; margin: 30px auto 14px;
+  border-radius: 50%;
+  border: 4px solid var(--line); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.login-grid-one { grid-template-columns: minmax(220px, 320px); justify-content: center; }
+
+/* ---------- últimas cargas (colaboradora) ---------- */
+
+.recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.recent-item {
+  display: grid; grid-template-columns: 80px auto 1fr 44px; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.9rem;
+}
+.recent-item:last-child { border-bottom: none; }
+.recent-date { color: var(--ink-soft); font-weight: 600; }
+.recent-note { color: var(--ink-faint); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- calendario de pagos: controles ---------- */
+
+.pay-remove { margin-left: auto; width: 36px; height: 36px; opacity: 0.55; }
+.pay-remove:hover { opacity: 1; }
+.check {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font-size: 0.86rem; font-weight: 600; cursor: pointer; min-height: 44px;
+}
+.check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.check-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.radio-col { display: flex; flex-direction: column; gap: 8px; }
+.skip-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.skip-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.86rem; }
+.banner-inline { color: var(--warn-ink); }
+
 /* ---------- avisos ---------- */
 
 .banner-warn {
