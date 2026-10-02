@@ -75,82 +75,43 @@ const fmtDateFull = (iso) =>
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-const NTH_LABEL = { 1: '1º', 2: '2º', 3: '3º', 4: '4º', last: 'último' };
 
-/* ---------- calendario de pagos (configurable) ---------- */
+/* ---------- calendario de pagos ----------
+   Regla de la casa: se paga el PRIMER VIERNES de cada mes.
+   Los feriados cuentan como días hábiles (no se corre la fecha).
+   Quien organiza puede quitar o agregar fechas puntuales a mano. */
 
 const DEFAULT_SCHEDULE = () => ({
-  mode: 'nthWeekday',      // 'nthWeekday' | 'monthDays' | 'weekly'
-  weekday: 5,              // 0=domingo … 6=sábado
-  nths: [2, 4],            // ocurrencias del mes: 1..4 o 'last'
-  monthDays: [15, 31],     // días fijos (31 = último día del mes)
   extra: [],               // fechas agregadas a mano
   skip: [],                // fechas quitadas a mano
 });
 
 function normalizeSchedule(s) {
-  const d = DEFAULT_SCHEDULE();
-  if (!s || typeof s !== 'object') return d;
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
-  const out = {
-    mode: ['nthWeekday', 'monthDays', 'weekly'].includes(s.mode) ? s.mode : d.mode,
-    weekday: Number.isInteger(s.weekday) && s.weekday >= 0 && s.weekday <= 6 ? s.weekday : d.weekday,
-    nths: Array.isArray(s.nths) ? s.nths.filter((n) => [1, 2, 3, 4, 'last'].includes(n)) : d.nths,
-    monthDays: Array.isArray(s.monthDays)
-      ? [...new Set(s.monthDays.filter((n) => Number.isInteger(n) && n >= 1 && n <= 31))].sort((a, b) => a - b)
-      : d.monthDays,
-    extra: Array.isArray(s.extra) ? s.extra.filter((x) => ISO.test(x)) : [],
-    skip: Array.isArray(s.skip) ? s.skip.filter((x) => ISO.test(x)) : [],
+  if (!s || typeof s !== 'object') return DEFAULT_SCHEDULE();
+  return {
+    extra: Array.isArray(s.extra) ? [...new Set(s.extra.filter((x) => ISO.test(x)))].sort() : [],
+    skip: Array.isArray(s.skip) ? [...new Set(s.skip.filter((x) => ISO.test(x)))].sort() : [],
   };
-  if (!out.nths.length) out.nths = d.nths;
-  if (!out.monthDays.length) out.monthDays = d.monthDays;
-  return out;
 }
 
 function currentSchedule() {
   return normalizeSchedule(loadDB().settings.paySchedule);
 }
 
-/** Texto humano del calendario: "cada 2º y 4º viernes del mes" */
-function describeSchedule(s = currentSchedule()) {
-  const day = WEEKDAYS[s.weekday];
-  if (s.mode === 'weekly') return `todos los ${day.endsWith('s') ? day : day + 's'}`;
-  if (s.mode === 'monthDays') {
-    const parts = s.monthDays.map((d) => (d === 31 ? 'último día' : `día ${d}`));
-    return `los ${parts.join(' y ')} de cada mes`;
-  }
-  const nths = s.nths.map((n) => NTH_LABEL[n]);
-  return `cada ${nths.join(' y ')} ${day} del mes`;
+function describeSchedule() {
+  return 'el primer viernes de cada mes';
 }
 
-function nthWeekdayOfMonth(year, m0, weekday, nth) {
-  if (nth === 'last') {
-    const last = new Date(year, m0 + 1, 0, 12);
-    const off = (last.getDay() - weekday + 7) % 7;
-    return toISO(new Date(year, m0, last.getDate() - off, 12));
-  }
+function firstFridayOfMonth(year, m0) {
   const first = new Date(year, m0, 1, 12);
-  const off = (weekday - first.getDay() + 7) % 7;
-  return toISO(new Date(year, m0, 1 + off + (nth - 1) * 7, 12));
+  const off = (5 - first.getDay() + 7) % 7; // 5 = viernes
+  return toISO(new Date(year, m0, 1 + off, 12));
 }
 
 function paydaysOfYear(year, schedule = currentSchedule()) {
   const out = new Set();
-  if (schedule.mode === 'weekly') {
-    const jan1 = new Date(year, 0, 1, 12);
-    const off = (schedule.weekday - jan1.getDay() + 7) % 7;
-    const d = new Date(year, 0, 1 + off, 12);
-    while (d.getFullYear() === year) { out.add(toISO(d)); d.setDate(d.getDate() + 7); }
-  } else {
-    for (let m = 0; m < 12; m++) {
-      if (schedule.mode === 'nthWeekday') {
-        schedule.nths.forEach((n) => out.add(nthWeekdayOfMonth(year, m, schedule.weekday, n)));
-      } else {
-        const lastDay = new Date(year, m + 1, 0).getDate();
-        schedule.monthDays.forEach((dd) => out.add(toISO(new Date(year, m, Math.min(dd, lastDay), 12))));
-      }
-    }
-  }
+  for (let m = 0; m < 12; m++) out.add(firstFridayOfMonth(year, m));
   schedule.extra.filter((x) => x.startsWith(String(year))).forEach((x) => out.add(x));
   schedule.skip.forEach((x) => out.delete(x));
   return [...out].sort();
@@ -177,8 +138,7 @@ function prevPayday(beforeIso) {
 /** Ventana que cubre un día de pago: (pago anterior, este pago]. */
 function payWindow(payday) {
   const prev = prevPayday(payday);
-  const fallback = currentSchedule().mode === 'weekly' ? -6 : -13;
-  return { from: prev ? addDays(prev, 1) : addDays(payday, fallback), to: payday };
+  return { from: prev ? addDays(prev, 1) : addDays(payday, -34), to: payday };
 }
 
 function isManualPayday(iso) {
@@ -427,16 +387,7 @@ function addExtraPayday(db, iso) {
   saveSchedule(db, s);
 }
 
-/* ---------- períodos con nombre ---------- */
-
-const PERIODS = [
-  { key: 'week',      label: 'Esta semana' },
-  { key: 'lastweek',  label: 'Semana pasada' },
-  { key: 'q1',        label: 'Quincena 1' },
-  { key: 'q2',        label: 'Quincena 2' },
-  { key: 'month',     label: 'Este mes' },
-  { key: 'lastmonth', label: 'Mes pasado' },
-];
+/* ---------- períodos internos (vista colaboradora e insights) ---------- */
 
 function periodRange(key, refIso = todayISO()) {
   switch (key) {
@@ -447,13 +398,6 @@ function periodRange(key, refIso = todayISO()) {
     case 'lastweek': {
       const from = addDays(weekStartISO(refIso), -7);
       return { from, to: addDays(from, 6) };
-    }
-    case 'q1': {
-      const from = monthStartISO(refIso);
-      return { from, to: from.slice(0, 8) + '15' };
-    }
-    case 'q2': {
-      return { from: refIso.slice(0, 8) + '16', to: monthEndISO(refIso) };
     }
     case 'lastmonth': {
       const d = fromISO(monthStartISO(refIso));

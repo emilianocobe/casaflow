@@ -79,21 +79,26 @@ function confirmModal(title, body, actionLabel, dataAttrs) {
 
 /* ================= estado de vistas ================= */
 
+/** Período que cubre el pago de hoy o el próximo (desde el pago anterior). */
+function currentPayWindow() {
+  const p = nextPayday(todayISO());
+  return p ? payWindow(p) : { from: monthStartISO(todayISO()), to: monthEndISO(todayISO()) };
+}
+
 const view = {
   collabMonth: todayISO().slice(0, 7),   // 'YYYY-MM'
-  orgPeriod: 'week',
-  orgCustom: { from: monthStartISO(todayISO()), to: todayISO() },
-  liqPeriod: 'q1',
-  liqCustom: { from: monthStartISO(todayISO()), to: todayISO() },
+  orgRange: { from: monthStartISO(todayISO()), to: monthEndISO(todayISO()) },
+  liqRange: null,                         // se inicializa con el período del próximo pago
   payYear: fromISO(todayISO()).getFullYear(),
-  regFilter: { staffId: '', month: todayISO().slice(0, 7) },
+  regFilter: { staffId: '', month: todayISO().slice(0, 7), mode: 'cal' },
 };
 
-function orgRange() {
-  return view.orgPeriod === 'custom' ? { ...view.orgCustom } : periodRange(view.orgPeriod);
-}
+const ordered = (r) => (r.from <= r.to ? { ...r } : { from: r.to, to: r.from });
+
+function orgRange() { return ordered(view.orgRange); }
 function liqRange() {
-  return view.liqPeriod === 'custom' ? { ...view.liqCustom } : periodRange(view.liqPeriod);
+  if (!view.liqRange) view.liqRange = currentPayWindow();
+  return ordered(view.liqRange);
 }
 
 /* ================= enrutador ================= */
@@ -165,7 +170,7 @@ function renderOnboarding() {
     {
       icon: 'chart',
       title: 'Para quien organiza',
-      body: 'Tablero con gráficos, liquidación por semana, quincena o mes, tarifas con historial y control de pagos cada 2º y 4º viernes. Todo calculado automáticamente.',
+      body: 'Tablero con gráficos, liquidación entre las fechas que elijas, tarifas con historial y control de pagos el primer viernes de cada mes. Todo calculado automáticamente.',
     },
     Cloud.enabled ? {
       icon: 'shield',
@@ -372,7 +377,7 @@ function renderCollab(db, session) {
     .forEach((e) => { valuesByDate[e.date] = (valuesByDate[e.date] || 0) + e.hours; });
 
   // pagos propios
-  const upcoming = paydaysAround(t).filter((p) => p >= addDays(t, -45) && p <= addDays(t, 45));
+  const upcoming = paydaysAround(t).filter((p) => p >= addDays(t, -100) && p <= addDays(t, 70));
   const payRows = upcoming.map((p) => {
     const paid = isPaid(db, p, me.id);
     const isNext = p === nextPayday(t);
@@ -557,27 +562,29 @@ function renderOrg(db, sub) {
   _lastOrgSub = sub;
 }
 
-/* ---- selector de período reutilizable ---- */
+/* ---- selector de fechas (único: Desde / Hasta) ---- */
 
-function periodPicker(current, custom, actionPrefix) {
-  const chips = PERIODS.map((p) => `
-    <button class="chip chip-pick ${current === p.key ? 'on' : ''}"
-      data-action="${actionPrefix}-period" data-key="${p.key}">${p.label}</button>`).join('');
-  const customChip = `
-    <button class="chip chip-pick ${current === 'custom' ? 'on' : ''}"
-      data-action="${actionPrefix}-period" data-key="custom">Personalizado</button>`;
-  const range = current === 'custom' ? `
-    <div class="custom-range">
+function dateRangePicker(r, actionPrefix) {
+  return `
+    <div class="custom-range" role="group" aria-label="Período">
       <label class="field"><span>Desde</span>
-        <input class="input" type="date" value="${custom.from}" data-action-change="${actionPrefix}-from"></label>
+        <input class="input" type="date" value="${r.from}" data-action-change="${actionPrefix}-from"></label>
       <label class="field"><span>Hasta</span>
-        <input class="input" type="date" value="${custom.to}" data-action-change="${actionPrefix}-to"></label>
-    </div>` : '';
-  return `<div class="chip-row period-row" role="group" aria-label="Período">${chips}${customChip}</div>${range}`;
+        <input class="input" type="date" value="${r.to}" data-action-change="${actionPrefix}-to"></label>
+    </div>`;
 }
 
 function rangeLabel(r) {
   return `${fmtDateShort(r.from)} — ${fmtDateShort(r.to)}`;
+}
+
+/** Si el rango coincide con la ventana de un día de pago, lo dice. */
+function liqHint(r) {
+  const p = paydaysAround(r.to).find((x) => x === r.to);
+  if (p && payWindow(p).from === r.from) {
+    return `Corresponde al pago del <b>${esc(cap(fmtDateLong(p)))}</b>.`;
+  }
+  return '';
 }
 
 /* ---- tablero ---- */
@@ -641,8 +648,7 @@ function orgDashboard(db) {
     <section class="page-head">
       <h1 class="display-sm">Tablero</h1>
       ${pinBanner}
-      ${periodPicker(view.orgPeriod, view.orgCustom, 'org')}
-      <p class="hint">Período: <b>${rangeLabel(r)}</b></p>
+      ${dateRangePicker(r, 'org')}
     </section>
     ${emptyTeam}
 
@@ -703,7 +709,7 @@ const TRIGGERS = [
   '¿Sabías que podés registrar un aumento de tarifa con fecha de vigencia? El histórico se recalcula solo con la tarifa correcta de cada día.',
   '¿Exportaste un respaldo últimamente? En Ajustes podés bajar todos los datos en un archivo.',
   '¿El equipo conoce su vista? Cada colaboradora puede ver su calendario y sus pagos, sin montos.',
-  '¿Comparaste este mes contra el anterior? Probá el período "Mes pasado" en el tablero.',
+  '¿Querés comparar? Elegí las fechas en el tablero: el insight compara contra el período anterior del mismo largo.',
 ];
 
 function orgInsight(db, staff, r) {
@@ -754,8 +760,8 @@ function orgLiquidacion(db) {
   return `
     <section class="page-head">
       <h1 class="display-sm">Liquidación</h1>
-      ${periodPicker(view.liqPeriod, view.liqCustom, 'liq')}
-      <p class="hint">Período: <b>${rangeLabel(r)}</b> · Cada registro se valúa con la tarifa vigente en su fecha.</p>
+      ${dateRangePicker(r, 'liq')}
+      <p class="hint">${liqHint(r)} Cada registro se valúa con la tarifa vigente en su fecha.</p>
     </section>
 
     <section class="card">
@@ -863,8 +869,7 @@ function orgPagos(db) {
   return `
     <section class="page-head">
       <h1 class="display-sm">Pagos</h1>
-      <p class="muted">Se paga <b>${esc(describeSchedule())}</b>. Tocá una persona para marcar su pago.
-        <a class="link" href="#/o/ajustes">Cambiar calendario</a></p>
+      <p class="muted">Se paga <b>${esc(describeSchedule())}</b> (los feriados cuentan como hábiles). Tocá una persona para marcar su pago.</p>
       <div class="btn-row" style="margin-top:8px">
         <button class="btn btn-ghost" data-action="payday-add">${icon('plus')} Agregar una fecha de pago</button>
       </div>
@@ -977,13 +982,102 @@ function rateModal(db, member) {
 /* ---- registros ---- */
 
 function orgRegistros(db) {
-  const staff = db.staff;
   const f = view.regFilter;
-  const from = f.month ? `${f.month}-01` : '0000-01-01';
-  const to = f.month ? monthEndISO(`${f.month}-01`) : '9999-12-31';
-  const list = entriesIn(db, from, to, f.staffId || undefined)
-    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  const from = `${f.month}-01`;
+  const to = monthEndISO(from);
+  const monthEntries = entriesIn(db, from, to);
+  const visible = f.staffId ? monthEntries.filter((e) => e.staffId === f.staffId) : monthEntries;
 
+  // personas a mostrar: activas + archivadas que tengan horas este mes
+  const people = db.staff.filter((m) => m.active || monthEntries.some((e) => e.staffId === m.id));
+  const totalOf = (id) => monthEntries.filter((e) => e.staffId === id).reduce((a, e) => a + e.hours, 0);
+  const totalAll = monthEntries.reduce((a, e) => a + e.hours, 0);
+
+  const [yy, mm] = f.month.split('-').map(Number);
+  const mLabel = cap(new Intl.DateTimeFormat('es-AR', { month: 'long', year: 'numeric' })
+    .format(new Date(yy, mm - 1, 12)));
+
+  // filtro por persona: cada chip es también la leyenda de colores con su total del mes
+  const chips = `
+    <button class="chip chip-pick ${!f.staffId ? 'on' : ''}" data-action="reg-filter" data-id="">
+      Todas · ${fmtNum(totalAll)} h</button>
+    ${people.map((m) => `
+      <button class="chip chip-pick legend-chip ${f.staffId === m.id ? 'on' : ''}" data-action="reg-filter" data-id="${m.id}">
+        <span class="dot" style="--c:${esc(m.color)}"></span>${esc(m.name)} · ${fmtNum(totalOf(m.id))} h</button>`).join('')}`;
+
+  const body = f.mode === 'list' ? regList(db, visible) : regCalendar(db, f.month, visible);
+
+  return `
+    <section class="page-head">
+      <h1 class="display-sm">Registros</h1>
+      <div class="reg-toolbar">
+        <div class="month-nav">
+          <button class="iconbtn" data-action="reg-month" data-d="-1" aria-label="Mes anterior">${icon('arrow-left')}</button>
+          <span class="month-label">${esc(mLabel)}</span>
+          <button class="iconbtn" data-action="reg-month" data-d="1" aria-label="Mes siguiente">${icon('arrow-right')}</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Vista">
+          <button class="${f.mode !== 'list' ? 'on' : ''}" data-action="reg-mode" data-mode="cal">${icon('calendar')} Calendario</button>
+          <button class="${f.mode === 'list' ? 'on' : ''}" data-action="reg-mode" data-mode="list">${icon('list')} Lista</button>
+        </div>
+        <button class="btn btn-primary" data-action="org-add-entry">${icon('plus')} Cargar horas</button>
+      </div>
+      <div class="chip-row" role="group" aria-label="Filtrar por persona">${chips}</div>
+    </section>
+    ${body}`;
+}
+
+/** Calendario mensual: cada día muestra un "sticker" por persona con sus horas. */
+function regCalendar(db, month, entries) {
+  const [y, m] = month.split('-').map(Number);
+  const firstDow = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7; // lunes=0
+  const days = new Date(y, m, 0).getDate();
+  const t = todayISO();
+
+  // horas por día y persona
+  const byDay = {};
+  entries.forEach((e) => {
+    byDay[e.date] = byDay[e.date] || {};
+    byDay[e.date][e.staffId] = (byDay[e.date][e.staffId] || 0) + e.hours;
+  });
+
+  let cells = '';
+  for (let i = 0; i < firstDow; i++) cells += '<div class="regcal-day regcal-empty" aria-hidden="true"></div>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${pad2(m)}-${pad2(d)}`;
+    const people = Object.entries(byDay[iso] || {})
+      .map(([sid, h]) => ({ m: staffById(db, sid), h }))
+      .filter((x) => x.m)
+      .sort((a, b) => a.m.name.localeCompare(b.m.name));
+    const stickers = people.map((x, i) => `
+      <span class="sticker" style="--c:${esc(x.m.color)};--r:${((d * 7 + i * 13) % 13) - 6}deg"
+        title="${esc(x.m.name)}: ${fmtNum(x.h)} h">${fmtNum(x.h)}</span>`).join('');
+    const label = `${fmtDateLong(iso)}: ` + (people.length
+      ? people.map((x) => `${x.m.name} ${fmtNum(x.h)} horas`).join(', ')
+      : 'sin horas');
+    const dow = (firstDow + d - 1) % 7;
+    const cls = ['regcal-day',
+      iso === t ? 'regcal-today' : '',
+      dow >= 5 ? 'regcal-weekend' : '',
+      people.length ? 'has-hours' : ''].join(' ');
+    cells += iso > t
+      ? `<div class="${cls} regcal-future" aria-label="${esc(label)}"><span class="regcal-num">${d}</span></div>`
+      : `<button class="${cls}" data-action="reg-day" data-date="${iso}" aria-label="${esc(label)}">
+          <span class="regcal-num">${d}</span><span class="stickers">${stickers}</span></button>`;
+  }
+  const dows = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+    .map((x) => `<span class="regcal-dow">${x}</span>`).join('');
+
+  return `
+    <section class="card">
+      <div class="regcal-grid">${dows}${cells}</div>
+      <p class="hint">Tocá un día para ver el detalle, corregir o cargar horas.</p>
+    </section>`;
+}
+
+function regList(db, entries) {
+  const list = [...entries]
+    .sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)));
   const rows = list.map((e) => {
     const m = staffById(db, e.staffId);
     return `
@@ -998,41 +1092,45 @@ function orgRegistros(db) {
         </td>
       </tr>`;
   }).join('');
-
-  const opts = staff.map((m) =>
-    `<option value="${m.id}" ${f.staffId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-
-  const totalH = list.reduce((a, e) => a + e.hours, 0);
-
   return `
-    <section class="page-head">
-      <h1 class="display-sm">Registros</h1>
-      <div class="filter-row">
-        <label class="field"><span>Persona</span>
-          <select class="input" data-action-change="reg-staff">
-            <option value="">Todas</option>${opts}</select>
-        </label>
-        <label class="field"><span>Mes</span>
-          <input class="input" type="month" value="${f.month}" data-action-change="reg-month">
-        </label>
-        <button class="btn btn-ghost" data-action="org-add-entry">${icon('plus')} Cargar horas</button>
-      </div>
-      <p class="hint">${list.length} registro${list.length === 1 ? '' : 's'} · ${fmtNum(totalH)} h en total</p>
-    </section>
     <section class="card">
       <div class="table-scroll">
         <table class="table">
           <thead><tr><th>Fecha</th><th>Persona</th><th class="num">Horas</th><th>Nota</th><th class="num"></th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="5" class="muted">Sin registros con estos filtros.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="5" class="muted">Sin registros este mes.</td></tr>'}</tbody>
         </table>
       </div>
     </section>`;
 }
 
-function entryModal(db, entry) {
+/** Detalle de un día: cargas de cada persona, con editar/borrar y agregar. */
+function dayModal(db, iso) {
+  const f = view.regFilter;
+  const list = entriesIn(db, iso, iso, f.staffId || undefined)
+    .map((e) => ({ e, m: staffById(db, e.staffId) }))
+    .sort((a, b) => (a.m ? a.m.name : '').localeCompare(b.m ? b.m.name : ''));
+  const rows = list.map(({ e, m }) => `
+    <li class="day-item">
+      <span class="sticker sticker-sm" style="--c:${esc(m ? m.color : '#999999')}">${fmtNum(e.hours)}</span>
+      <div class="day-item-text"><span><b>${esc(m ? m.name : '—')}</b> · ${fmtNum(e.hours)} h</span>
+        ${e.note ? `<small class="hint">${esc(e.note)}</small>` : ''}</div>
+      <button class="iconbtn" data-action="entry-edit" data-id="${e.id}" aria-label="Editar">${icon('edit')}</button>
+      <button class="iconbtn" data-action="entry-del" data-id="${e.id}" aria-label="Borrar">${icon('trash')}</button>
+    </li>`).join('');
+  openModal(`
+    <h3>${esc(cap(fmtDateLong(iso)))}</h3>
+    ${rows ? `<ul class="day-list">${rows}</ul>` : '<p class="muted">No hay horas cargadas este día.</p>'}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="modal-close">Cerrar</button>
+      <button class="btn btn-primary" data-action="reg-day-add" data-date="${iso}">${icon('plus')} Cargar horas este día</button>
+    </div>`);
+}
+
+function entryModal(db, entry, presetDate, presetStaffId) {
   const staff = activeStaff(db);
+  const pick = entry ? entry.staffId : presetStaffId;
   const opts = staff.map((m) =>
-    `<option value="${m.id}" ${entry && entry.staffId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+    `<option value="${m.id}" ${pick === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
   openModal(`
     <h3>${entry ? 'Editar registro' : 'Cargar horas'}</h3>
     <form data-action-submit="org-entry-save" ${entry ? `data-id="${entry.id}"` : ''}>
@@ -1040,7 +1138,7 @@ function entryModal(db, entry) {
         <select class="input" name="staffId" required>${opts}</select></label>`}
       <div class="form-grid">
         <label class="field"><span>Fecha</span>
-          <input class="input" name="date" type="date" required value="${entry ? entry.date : todayISO()}" max="${todayISO()}">
+          <input class="input" name="date" type="date" required value="${entry ? entry.date : (presetDate || todayISO())}" max="${todayISO()}">
         </label>
         <label class="field"><span>Horas</span>
           <input class="input" name="hours" type="number" min="0.5" max="24" step="0.5" required value="${entry ? entry.hours : ''}">
@@ -1060,53 +1158,25 @@ function entryModal(db, entry) {
 
 function scheduleCard(db) {
   const s = currentSchedule();
-  const wdOpts = [1, 2, 3, 4, 5, 6, 0].map((d) =>
-    `<option value="${d}" ${s.weekday === d ? 'selected' : ''}>${cap(WEEKDAYS[d])}</option>`).join('');
-  const nthBoxes = [1, 2, 3, 4, 'last'].map((n) => `
-    <label class="check"><input type="checkbox" name="nths" value="${n}" ${s.nths.includes(n) ? 'checked' : ''}>
-      <span>${NTH_LABEL[n]}</span></label>`).join('');
-  const md = s.monthDays.filter((d) => d !== 31);
-  const skipped = s.skip.slice().sort().map((d) => `
+  const next = nextPayday(todayISO());
+  const row = (d, action, label) => `
     <li><span>${esc(cap(fmtDateLong(d)))} ${d.slice(0, 4)}</span>
-      <button class="btn btn-mini" data-action="payday-restore" data-payday="${d}">Restaurar</button></li>`).join('');
+      <button class="btn btn-mini" data-action="${action}" data-payday="${d}">${label}</button></li>`;
+  const skipped = s.skip.map((d) => row(d, 'payday-restore', 'Restaurar')).join('');
+  const added = s.extra.map((d) => row(d, 'payday-skip', 'Quitar')).join('');
 
   return `
     <section class="card card-accent">
       <h2 class="card-title">${icon('calendar')} Días de pago</h2>
-      <p class="hint">Hoy: <b>${esc(describeSchedule(s))}</b>. Cambiá el esquema cuando quieras; los pagos ya marcados se conservan.</p>
-      <form data-action-submit="schedule-save" class="schedule-form">
-        <div class="field"><span>Esquema</span>
-          <div class="radio-col">
-            <label class="check"><input type="radio" name="mode" value="nthWeekday" ${s.mode === 'nthWeekday' ? 'checked' : ''}>
-              <span>Ciertas semanas del mes (ej: 2º y 4º viernes)</span></label>
-            <label class="check"><input type="radio" name="mode" value="monthDays" ${s.mode === 'monthDays' ? 'checked' : ''}>
-              <span>Días fijos del mes (ej: 15 y último)</span></label>
-            <label class="check"><input type="radio" name="mode" value="weekly" ${s.mode === 'weekly' ? 'checked' : ''}>
-              <span>Todas las semanas, un día fijo</span></label>
-          </div>
-        </div>
-        <div class="form-grid">
-          <label class="field"><span>Día de la semana</span>
-            <select class="input" name="weekday">${wdOpts}</select>
-            <small class="hint">Se usa en los esquemas por semana.</small>
-          </label>
-          <div class="field"><span>Qué semanas del mes</span>
-            <div class="check-row">${nthBoxes}</div>
-          </div>
-        </div>
-        <div class="form-grid">
-          <label class="field"><span>Día fijo 1</span>
-            <input class="input" name="md1" type="number" min="1" max="30" value="${md[0] || ''}" placeholder="15"></label>
-          <label class="field"><span>Día fijo 2</span>
-            <input class="input" name="md2" type="number" min="1" max="30" value="${md[1] || ''}" placeholder="30"></label>
-        </div>
-        <label class="check"><input type="checkbox" name="mdLast" ${s.monthDays.includes(31) ? 'checked' : ''}>
-          <span>Incluir el último día de cada mes</span></label>
-        <div class="btn-row" style="margin-top:12px">
-          <button class="btn btn-primary" type="submit">Guardar calendario</button>
-          <a class="btn btn-ghost" href="#/o/pagos">Ver los pagos del año</a>
-        </div>
-      </form>
+      <p class="pay-rule">Se paga <b>el primer viernes de cada mes</b>.</p>
+      <p class="hint">Los feriados cuentan como días hábiles: si el primer viernes es feriado, se paga igual ese día.
+        ${next ? `Próximo pago: <b>${esc(cap(fmtDateLong(next)))}</b>.` : ''}</p>
+      <div class="btn-row" style="margin-top:12px">
+        <a class="btn btn-ghost" href="#/o/pagos">${icon('check')} Ver y marcar pagos</a>
+        <button class="btn btn-ghost" data-action="payday-add">${icon('plus')} Agregar una fecha puntual</button>
+      </div>
+      ${added ? `<details class="rate-history" open><summary>Fechas agregadas a mano (${s.extra.length})</summary>
+        <ul class="skip-list">${added}</ul></details>` : ''}
       ${skipped ? `<details class="rate-history"><summary>Fechas quitadas a mano (${s.skip.length})</summary>
         <ul class="skip-list">${skipped}</ul></details>` : ''}
     </section>`;
@@ -1175,9 +1245,9 @@ function orgAjustes(db) {
 
 const GLOSSARY = [
   { icon: 'money',    term: 'Liquidación',   def: 'El cálculo de cuánto corresponde pagar: horas trabajadas × tarifa vigente, en un período.' },
-  { icon: 'calendar', term: 'Quincena',      def: 'Mitades del mes: del 1 al 15 (quincena 1) y del 16 a fin de mes (quincena 2).' },
+  { icon: 'calendar', term: 'Período',       def: 'Las fechas Desde y Hasta que elegís en el tablero y en la liquidación.' },
   { icon: 'clock',    term: 'Tarifa vigente', def: 'El valor por hora que aplica en una fecha. Si hubo aumentos, cada día usa el valor que correspondía.' },
-  { icon: 'check',    term: 'Día de pago',   def: null },
+  { icon: 'check',    term: 'Día de pago',   def: 'El primer viernes de cada mes. Los feriados cuentan como días hábiles: la fecha no se corre.' },
   { icon: 'chart',    term: 'Mapa de calor', def: 'Calendario donde cada día se pinta más intenso cuantas más horas se registraron.' },
   { icon: 'download', term: 'Respaldo',      def: 'Archivo con todos tus datos, para guardar o pasar a otro dispositivo.' },
 ];
@@ -1290,8 +1360,6 @@ document.addEventListener('click', (ev) => {
     }
 
     /* organizador: períodos */
-    case 'org-period': view.orgPeriod = el.dataset.key; route(); break;
-    case 'liq-period': view.liqPeriod = el.dataset.key; route(); break;
     case 'pay-year': view.payYear += Number(el.dataset.d); route(); break;
 
     /* pagos */
@@ -1324,7 +1392,17 @@ document.addEventListener('click', (ev) => {
     }
 
     /* registros */
-    case 'org-add-entry': entryModal(db, null); break;
+    case 'org-add-entry': entryModal(db, null, todayISO(), view.regFilter.staffId); break;
+    case 'reg-filter': view.regFilter.staffId = el.dataset.id; route(); break;
+    case 'reg-mode': view.regFilter.mode = el.dataset.mode; route(); break;
+    case 'reg-month': {
+      const d = fromISO(view.regFilter.month + '-01');
+      d.setMonth(d.getMonth() + Number(el.dataset.d));
+      view.regFilter.month = toISO(d).slice(0, 7);
+      route(); break;
+    }
+    case 'reg-day': dayModal(db, el.dataset.date); break;
+    case 'reg-day-add': entryModal(db, null, el.dataset.date, view.regFilter.staffId); break;
     case 'entry-edit': entryModal(db, db.entries.find((x) => x.id === el.dataset.id)); break;
     case 'entry-del':
       confirmModal('¿Borrar este registro?',
@@ -1358,12 +1436,10 @@ document.addEventListener('change', (ev) => {
   const a = el.dataset.actionChange;
   switch (a) {
     /* si el campo de fecha queda vacío, se ignora el cambio (evita fechas inválidas) */
-    case 'org-from': if (el.value) { view.orgCustom.from = el.value; route(); } break;
-    case 'org-to': if (el.value) { view.orgCustom.to = el.value; route(); } break;
-    case 'liq-from': if (el.value) { view.liqCustom.from = el.value; route(); } break;
-    case 'liq-to': if (el.value) { view.liqCustom.to = el.value; route(); } break;
-    case 'reg-staff': view.regFilter.staffId = el.value; route(); break;
-    case 'reg-month': view.regFilter.month = el.value; route(); break;
+    case 'org-from': if (el.value) { view.orgRange.from = el.value; route(); } break;
+    case 'org-to': if (el.value) { view.orgRange.to = el.value; route(); } break;
+    case 'liq-from': if (el.value) { liqRange(); view.liqRange.from = el.value; route(); } break;
+    case 'liq-to': if (el.value) { liqRange(); view.liqRange.to = el.value; route(); } break;
     case 'import': {
       const file = el.files[0];
       if (!file) return;
@@ -1457,22 +1533,6 @@ document.addEventListener('submit', (ev) => {
       db.settings.houseName = String(fd.get('houseName')).trim() || 'Mi casa';
       db.settings.ownerName = String(fd.get('ownerName')).trim() || 'Organizador/a';
       Store.putSettings(db.settings); toast('Guardado'); route();
-      break;
-    }
-    case 'schedule-save': {
-      const nths = fd.getAll('nths').map((n) => (n === 'last' ? 'last' : Number(n)));
-      const monthDays = [Number(fd.get('md1')), Number(fd.get('md2'))]
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
-      if (fd.get('mdLast')) monthDays.push(31);
-      const schedule = {
-        ...currentSchedule(),
-        mode: String(fd.get('mode')),
-        weekday: Number(fd.get('weekday')),
-        nths: nths.length ? nths : currentSchedule().nths,
-        monthDays: monthDays.length ? monthDays : currentSchedule().monthDays,
-      };
-      saveSchedule(db, schedule);
-      toast('Calendario de pagos guardado ✔'); route();
       break;
     }
     case 'payday-add-submit': {

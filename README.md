@@ -12,7 +12,7 @@ Todo empezó con una planilla. Cada semana, la misma pregunta: *¿cuántas horas
 CasaFlow convierte ese ida y vuelta en algo simple:
 
 - Las **colaboradoras** entran con un toque desde la tablet, cargan sus horas en 10 segundos y ven su propio calendario y el estado de sus pagos.
-- Quien **organiza la casa** ve un tablero con gráficos, liquida por semana, quincena o mes, y marca los pagos de cada **2º y 4º viernes**.
+- Quien **organiza la casa** ve un tablero con gráficos, liquida entre las fechas que elija, y marca los pagos del **primer viernes de cada mes**.
 
 Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor.
 
@@ -22,7 +22,7 @@ Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor
 |---|---|
 | Carga de horas en segundos, con chips rápidos | Tablero con KPIs, barras, dona y ritmo diario |
 | Calendario personal tipo mapa de calor | Liquidación por período con recibo imprimible |
-| Estado de sus pagos (sin ver montos ajenos) | Control de pagos del 2º y 4º viernes, con montos sugeridos |
+| Estado de sus pagos (sin ver montos ajenos) | Control de pagos del primer viernes de cada mes, con montos sugeridos |
 | Mensajes e insights motivadores | Tarifas con **historial por fecha de vigencia** (aumentos de convenio) |
 | | Equipo editable: altas, archivo, colores |
 | | Registros filtrables, exportación y respaldo |
@@ -55,9 +55,13 @@ Listo: la app pasa sola a modo nube. Quien entra primero crea su casa; después 
 - El código es público; **tus datos no**. La demo trae un equipo ficticio (`?demo` en la URL fuerza el modo local de demostración).
 - Exportá un **respaldo JSON** cuando quieras desde Ajustes.
 
-## 📅 Días de pago a tu medida
+## 📅 Días de pago
 
-Desde *Ajustes → Días de pago* elegís el esquema: **ciertas semanas del mes** (2º y 4º viernes, 1º y 3º sábado, último viernes…), **días fijos** (15 y último día) o **semanal**. Y en *Pagos* podés **quitar una fecha** puntual o **agregar una a mano** (adelanto, feriado, aguinaldo).
+Se paga el **primer viernes de cada mes**. Los feriados cuentan como días hábiles: la fecha no se corre. En *Pagos* podés **quitar una fecha** puntual o **agregar una a mano** (adelanto, aguinaldo).
+
+## 🗓️ Registros en calendario
+
+En *Registros* cada día del mes muestra un "sticker" de color por colaboradora con sus horas. Los chips de arriba filtran por persona y muestran su total del mes; tocando un día ves el detalle, corregís o cargás horas.
 
 ## 🚀 Probarla
 
@@ -103,9 +107,9 @@ casaflow/
 | Término | Qué significa |
 |---|---|
 | **Liquidación** | Horas trabajadas × tarifa vigente, en un período elegido |
-| **Quincena** | Del 1 al 15 (Q1) y del 16 a fin de mes (Q2) |
+| **Período** | Las fechas Desde y Hasta que elegís en el tablero y en la liquidación |
 | **Tarifa vigente** | El valor por hora que aplicaba en cada fecha; los aumentos no pisan el pasado |
-| **Día de pago** | El 2º y el 4º viernes de cada mes |
+| **Día de pago** | El primer viernes de cada mes (los feriados cuentan como hábiles) |
 | **Respaldo** | Archivo JSON con todos tus datos, portable a otro dispositivo |
 
 ## 🤝 Licencia

@@ -616,6 +616,77 @@ img, svg { vertical-align: middle; }
 .skip-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.86rem; }
 .banner-inline { color: var(--warn-ink); }
 
+/* ---------- registros: calendario de stickers ---------- */
+
+.reg-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px; margin: 6px 0 14px;
+}
+.segmented {
+  display: inline-flex; padding: 4px; gap: 4px;
+  border-radius: 14px; background: var(--bg-soft); border: 1px solid var(--line);
+}
+.segmented button {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 40px; padding: 8px 14px; border: none; border-radius: 10px;
+  background: transparent; color: var(--ink-soft);
+  font: inherit; font-size: 0.86rem; font-weight: 700; cursor: pointer;
+}
+.segmented button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+.legend-chip .dot {
+  display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--c); margin-right: 2px;
+}
+.chip-pick.on.legend-chip .dot { box-shadow: 0 0 0 2px var(--accent-ink); }
+
+.regcal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.regcal-dow {
+  text-align: center; font-size: 0.7rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); padding-bottom: 4px;
+}
+.regcal-day {
+  min-height: 92px; padding: 7px; border-radius: 13px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: inherit; font: inherit; text-align: left;
+}
+button.regcal-day { cursor: pointer; transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s; }
+button.regcal-day:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.regcal-empty { background: transparent; border-color: transparent; }
+.regcal-weekend { background: var(--bg-soft); }
+.regcal-future { opacity: 0.45; }
+.regcal-today { border: 2px solid var(--accent); }
+.regcal-num { font-size: 0.78rem; font-weight: 800; color: var(--ink-soft); }
+.regcal-today .regcal-num { color: var(--accent); }
+
+.stickers { display: flex; flex-wrap: wrap; gap: 4px; }
+.sticker {
+  display: inline-grid; place-items: center; flex: 0 0 auto;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--c); color: #fff;
+  font-size: 0.76rem; font-weight: 900; letter-spacing: -0.02em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.14), inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+  transform: rotate(var(--r, 0deg));
+  animation: sticker-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.3) backwards;
+}
+.sticker-sm { width: 36px; height: 36px; transform: none; animation: none; }
+@keyframes sticker-in { from { transform: scale(0.4) rotate(var(--r, 0deg)); opacity: 0; } }
+
+@media (max-width: 620px) {
+  .regcal-grid { gap: 4px; }
+  .regcal-day { min-height: 64px; padding: 4px; border-radius: 9px; gap: 3px; }
+  .regcal-dow { font-size: 0.6rem; }
+  .sticker { width: 22px; height: 22px; font-size: 0.58rem; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.14); }
+}
+
+.day-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.day-item { display: grid; grid-template-columns: 36px 1fr 44px 44px; gap: 10px; align-items: center; }
+.day-item-text { display: flex; flex-direction: column; font-size: 0.92rem; }
+.day-item-text .hint { margin: 2px 0 0; }
+
+.pay-rule { font-size: 1.15rem; margin: 0 0 4px; }
+
 /* ---------- avisos ---------- */
 
 .banner-warn {
