@@ -79,10 +79,13 @@ function confirmModal(title, body, actionLabel, dataAttrs) {
 
 /* ================= estado de vistas ================= */
 
-/** Período que cubre el pago de hoy o el próximo (desde el pago anterior). */
+/** Período a liquidar: desde el último pago hasta el próximo cargado (o hasta hoy). */
 function currentPayWindow() {
-  const p = nextPayday(todayISO());
-  return p ? payWindow(p) : { from: monthStartISO(todayISO()), to: monthEndISO(todayISO()) };
+  const t = todayISO();
+  const next = nextPayday(t);
+  if (next) return payWindow(next);
+  const prev = prevPayday(t);
+  return prev ? { from: addDays(prev, 1), to: t } : { from: monthStartISO(t), to: t };
 }
 
 const view = {
@@ -170,7 +173,7 @@ function renderOnboarding() {
     {
       icon: 'chart',
       title: 'Para quien organiza',
-      body: 'Tablero con gráficos, liquidación entre las fechas que elijas, tarifas con historial y control de pagos el primer viernes de cada mes. Todo calculado automáticamente.',
+      body: 'Tablero con gráficos, liquidación entre las fechas que elijas, tarifas con historial y control de los pagos que vas registrando. Todo calculado automáticamente.',
     },
     Cloud.enabled ? {
       icon: 'shield',
@@ -377,7 +380,7 @@ function renderCollab(db, session) {
     .forEach((e) => { valuesByDate[e.date] = (valuesByDate[e.date] || 0) + e.hours; });
 
   // pagos propios
-  const upcoming = paydaysAround(t).filter((p) => p >= addDays(t, -100) && p <= addDays(t, 70));
+  const upcoming = allPaydays().filter((p) => p >= addDays(t, -100));
   const payRows = upcoming.map((p) => {
     const paid = isPaid(db, p, me.id);
     const isNext = p === nextPayday(t);
@@ -477,8 +480,7 @@ function renderCollab(db, session) {
 
     <section class="card">
       <h2 class="card-title">${icon('money')} Mis pagos</h2>
-      <p class="hint">Los pagos son ${esc(describeSchedule())}.</p>
-      <ul class="timeline">${payRows}</ul>
+      ${payRows ? `<ul class="timeline">${payRows}</ul>` : '<p class="muted">Todavía no hay fechas de pago cargadas.</p>'}
     </section>
 
     ${insight ? `
@@ -666,7 +668,8 @@ function orgDashboard(db) {
       <div class="card kpi ${daysToPay !== null && daysToPay <= 2 ? 'kpi-alert' : ''}">
         <span class="kpi-icon">${icon('calendar')}</span>
         <span class="kpi-label">Próximo pago</span>
-        <span class="kpi-num kpi-date">${next ? esc(cap(fmtDateLong(next))) : '—'}</span>
+        <span class="kpi-num kpi-date">${next ? esc(cap(fmtDateLong(next))) : 'Sin fecha'}</span>
+        ${next ? '' : '<a class="hint link" href="#/o/pagos">Cargar una fecha →</a>'}
         ${daysToPay !== null ? `<span class="hint">${daysToPay === 0 ? '¡Es hoy!' : `Faltan ${daysToPay} día${daysToPay === 1 ? '' : 's'}`}</span>` : ''}
       </div>
       <div class="card kpi ${pendingCount ? 'kpi-alert' : ''}">
@@ -854,11 +857,10 @@ function orgPagos(db) {
           <span class="tl-dot"></span>
           <span class="tl-date">${esc(cap(fmtDateLong(p)))}</span>
           ${isNext ? '<span class="chip chip-accent">Próximo</span>' : ''}
-          ${isManualPayday(p) ? '<span class="chip chip-soft">Agregado a mano</span>' : ''}
           ${allPaid ? `<span class="chip chip-ok">${icon('check')} Completo</span>`
             : isLate ? '<span class="chip chip-warn">Pendiente</span>'
             : p < t && noWork ? '<span class="chip chip-soft">Sin horas registradas</span>' : ''}
-          <button class="iconbtn pay-remove" data-action="payday-skip" data-payday="${p}"
+          <button class="iconbtn pay-remove" data-action="payday-remove" data-payday="${p}"
             title="Quitar esta fecha de pago" aria-label="Quitar esta fecha de pago">${icon('x')}</button>
         </div>
         <p class="hint">Cubre del ${fmtDateShort(w.from)} al ${fmtDateShort(w.to)}</p>
@@ -869,9 +871,9 @@ function orgPagos(db) {
   return `
     <section class="page-head">
       <h1 class="display-sm">Pagos</h1>
-      <p class="muted">Se paga <b>${esc(describeSchedule())}</b> (los feriados cuentan como hábiles). Tocá una persona para marcar su pago.</p>
+      <p class="muted">Cargá cada fecha en que pagás y tocá a cada persona para marcar su pago. El monto sugerido sale de las horas desde el pago anterior.</p>
       <div class="btn-row" style="margin-top:8px">
-        <button class="btn btn-ghost" data-action="payday-add">${icon('plus')} Agregar una fecha de pago</button>
+        <button class="btn btn-primary" data-action="payday-add">${icon('plus')} Agregar fecha de pago</button>
       </div>
       <div class="year-nav">
         <button class="iconbtn" data-action="pay-year" data-d="-1" aria-label="Año anterior">${icon('arrow-left')}</button>
@@ -880,7 +882,8 @@ function orgPagos(db) {
       </div>
       ${progressLine}
     </section>
-    <ul class="timeline pay-timeline">${items}</ul>`;
+    ${items ? `<ul class="timeline pay-timeline">${items}</ul>`
+      : `<section class="card" style="text-align:center"><p class="muted">No hay fechas de pago cargadas en ${view.payYear}.</p></section>`}`;
 }
 
 /* ---- equipo ---- */
@@ -1156,29 +1159,16 @@ function entryModal(db, entry, presetDate, presetStaffId) {
 
 /* ---- ajustes ---- */
 
-function scheduleCard(db) {
-  const s = currentSchedule();
+function scheduleCard() {
   const next = nextPayday(todayISO());
-  const row = (d, action, label) => `
-    <li><span>${esc(cap(fmtDateLong(d)))} ${d.slice(0, 4)}</span>
-      <button class="btn btn-mini" data-action="${action}" data-payday="${d}">${label}</button></li>`;
-  const skipped = s.skip.map((d) => row(d, 'payday-restore', 'Restaurar')).join('');
-  const added = s.extra.map((d) => row(d, 'payday-skip', 'Quitar')).join('');
-
   return `
     <section class="card card-accent">
-      <h2 class="card-title">${icon('calendar')} Días de pago</h2>
-      <p class="pay-rule">Se paga <b>el primer viernes de cada mes</b>.</p>
-      <p class="hint">Los feriados cuentan como días hábiles: si el primer viernes es feriado, se paga igual ese día.
-        ${next ? `Próximo pago: <b>${esc(cap(fmtDateLong(next)))}</b>.` : ''}</p>
+      <h2 class="card-title">${icon('calendar')} Pagos</h2>
+      <p class="pay-rule">Las fechas de pago se cargan <b>a mano</b>.</p>
+      <p class="hint">${next ? `Próxima fecha cargada: <b>${esc(cap(fmtDateLong(next)))}</b>.` : 'No hay ninguna fecha próxima cargada.'}</p>
       <div class="btn-row" style="margin-top:12px">
-        <a class="btn btn-ghost" href="#/o/pagos">${icon('check')} Ver y marcar pagos</a>
-        <button class="btn btn-ghost" data-action="payday-add">${icon('plus')} Agregar una fecha puntual</button>
+        <a class="btn btn-ghost" href="#/o/pagos">${icon('check')} Ir a Pagos</a>
       </div>
-      ${added ? `<details class="rate-history" open><summary>Fechas agregadas a mano (${s.extra.length})</summary>
-        <ul class="skip-list">${added}</ul></details>` : ''}
-      ${skipped ? `<details class="rate-history"><summary>Fechas quitadas a mano (${s.skip.length})</summary>
-        <ul class="skip-list">${skipped}</ul></details>` : ''}
     </section>`;
 }
 
@@ -1247,7 +1237,7 @@ const GLOSSARY = [
   { icon: 'money',    term: 'Liquidación',   def: 'El cálculo de cuánto corresponde pagar: horas trabajadas × tarifa vigente, en un período.' },
   { icon: 'calendar', term: 'Período',       def: 'Las fechas Desde y Hasta que elegís en el tablero y en la liquidación.' },
   { icon: 'clock',    term: 'Tarifa vigente', def: 'El valor por hora que aplica en una fecha. Si hubo aumentos, cada día usa el valor que correspondía.' },
-  { icon: 'check',    term: 'Día de pago',   def: 'El primer viernes de cada mes. Los feriados cuentan como días hábiles: la fecha no se corre.' },
+  { icon: 'check',    term: 'Día de pago',   def: 'Cada fecha en que pagás. Las cargás a mano en Pagos; el monto sugerido cubre desde el pago anterior.' },
   { icon: 'chart',    term: 'Mapa de calor', def: 'Calendario donde cada día se pinta más intenso cuantas más horas se registraron.' },
   { icon: 'download', term: 'Respaldo',      def: 'Archivo con todos tus datos, para guardar o pasar a otro dispositivo.' },
 ];
@@ -1297,19 +1287,21 @@ document.addEventListener('click', (ev) => {
     case 'cloud-signin': Cloud.signIn().catch((e) => toast('No se pudo entrar (' + (e.code || e.message) + ')', 'err')); break;
 
     /* calendario de pagos */
-    case 'payday-skip':
+    case 'payday-remove': {
+      const iso = el.dataset.payday;
+      const marked = db.payments.filter((p) => p.payday === iso).length;
       confirmModal('¿Quitar esta fecha de pago?',
-        `El <b>${esc(cap(fmtDateLong(el.dataset.payday)))}</b> dejará de figurar como día de pago. Podés restaurarla desde Ajustes.`,
-        'Quitar', `data-action="payday-skip-confirm" data-payday="${el.dataset.payday}"`);
+        `Se quita el <b>${esc(cap(fmtDateLong(iso)))}</b>` +
+        (marked ? ` y se desmarcan <b>${marked} pago${marked === 1 ? '' : 's'}</b> registrados ese día.` : '.'),
+        'Quitar', `data-action="payday-remove-confirm" data-payday="${iso}"`);
       break;
-    case 'payday-skip-confirm':
-      skipPayday(db, el.dataset.payday); closeModal(); toast('Fecha quitada'); route(); break;
-    case 'payday-restore':
-      restorePayday(db, el.dataset.payday); toast('Fecha restaurada'); route(); break;
+    }
+    case 'payday-remove-confirm':
+      removePayday(db, el.dataset.payday); closeModal(); toast('Fecha quitada'); route(); break;
     case 'payday-add':
       openModal(`
         <h3>Agregar una fecha de pago</h3>
-        <p class="muted">Para un pago fuera del calendario habitual (adelanto, feriado, aguinaldo…).</p>
+        <p class="muted">El día en que pagás (o vas a pagar). Después marcás a cada persona en Pagos.</p>
         <form data-action-submit="payday-add-submit">
           <label class="field"><span>Fecha</span>
             <input class="input" name="date" type="date" required value="${todayISO()}"></label>

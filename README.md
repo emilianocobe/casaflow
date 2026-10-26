@@ -12,7 +12,7 @@ Todo empezó con una planilla. Cada semana, la misma pregunta: *¿cuántas horas
 CasaFlow convierte ese ida y vuelta en algo simple:
 
 - Las **colaboradoras** entran con un toque desde la tablet, cargan sus horas en 10 segundos y ven su propio calendario y el estado de sus pagos.
-- Quien **organiza la casa** ve un tablero con gráficos, liquida entre las fechas que elija, y marca los pagos del **primer viernes de cada mes**.
+- Quien **organiza la casa** ve un tablero con gráficos, liquida entre las fechas que elija, y registra los pagos en las fechas que carga a mano.
 
 Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor.
 
@@ -22,7 +22,7 @@ Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor
 |---|---|
 | Carga de horas en segundos, con chips rápidos | Tablero con KPIs, barras, dona y ritmo diario |
 | Calendario personal tipo mapa de calor | Liquidación por período con recibo imprimible |
-| Estado de sus pagos (sin ver montos ajenos) | Control de pagos del primer viernes de cada mes, con montos sugeridos |
+| Estado de sus pagos (sin ver montos ajenos) | Pagos en fechas cargadas a mano, con montos sugeridos |
 | Mensajes e insights motivadores | Tarifas con **historial por fecha de vigencia** (aumentos de convenio) |
 | | Equipo editable: altas, archivo, colores |
 | | Registros filtrables, exportación y respaldo |
@@ -57,7 +57,7 @@ Listo: la app pasa sola a modo nube. Quien entra primero crea su casa; después 
 
 ## 📅 Días de pago
 
-Se paga el **primer viernes de cada mes**. Los feriados cuentan como días hábiles: la fecha no se corre. En *Pagos* podés **quitar una fecha** puntual o **agregar una a mano** (adelanto, aguinaldo).
+Las fechas de pago son **100% manuales**: en *Pagos* cargás cada fecha y marcás a quién le pagaste. El monto sugerido cubre las horas desde el pago anterior. No hay ninguna fecha automática.
 
 ## 🗓️ Registros en calendario
 
@@ -109,7 +109,7 @@ casaflow/
 | **Liquidación** | Horas trabajadas × tarifa vigente, en un período elegido |
 | **Período** | Las fechas Desde y Hasta que elegís en el tablero y en la liquidación |
 | **Tarifa vigente** | El valor por hora que aplicaba en cada fecha; los aumentos no pisan el pasado |
-| **Día de pago** | El primer viernes de cada mes (los feriados cuentan como hábiles) |
+| **Día de pago** | Cada fecha en que pagás; se cargan a mano en Pagos |
 | **Respaldo** | Archivo JSON con todos tus datos, portable a otro dispositivo |
 
 ## 🤝 Licencia

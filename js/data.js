@@ -76,14 +76,13 @@ const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
-/* ---------- calendario de pagos ----------
-   Regla de la casa: se paga el PRIMER VIERNES de cada mes.
-   Los feriados cuentan como días hábiles (no se corre la fecha).
-   Quien organiza puede quitar o agregar fechas puntuales a mano. */
+/* ---------- fechas de pago ----------
+   Son 100% manuales: quien organiza carga cada fecha de pago.
+   Una fecha que ya tiene pagos marcados se conserva siempre
+   (así nada de lo registrado desaparece). */
 
 const DEFAULT_SCHEDULE = () => ({
-  extra: [],               // fechas agregadas a mano
-  skip: [],                // fechas quitadas a mano
+  extra: [],               // fechas de pago cargadas a mano
 });
 
 function normalizeSchedule(s) {
@@ -91,7 +90,6 @@ function normalizeSchedule(s) {
   if (!s || typeof s !== 'object') return DEFAULT_SCHEDULE();
   return {
     extra: Array.isArray(s.extra) ? [...new Set(s.extra.filter((x) => ISO.test(x)))].sort() : [],
-    skip: Array.isArray(s.skip) ? [...new Set(s.skip.filter((x) => ISO.test(x)))].sort() : [],
   };
 }
 
@@ -100,49 +98,42 @@ function currentSchedule() {
 }
 
 function describeSchedule() {
-  return 'el primer viernes de cada mes';
+  return 'en las fechas que carga quien organiza';
 }
 
-function firstFridayOfMonth(year, m0) {
-  const first = new Date(year, m0, 1, 12);
-  const off = (5 - first.getDay() + 7) % 7; // 5 = viernes
-  return toISO(new Date(year, m0, 1 + off, 12));
-}
-
-function paydaysOfYear(year, schedule = currentSchedule()) {
-  const out = new Set();
-  for (let m = 0; m < 12; m++) out.add(firstFridayOfMonth(year, m));
-  schedule.extra.filter((x) => x.startsWith(String(year))).forEach((x) => out.add(x));
-  schedule.skip.forEach((x) => out.delete(x));
+/** Todas las fechas de pago: las cargadas a mano + las que ya tienen pagos marcados. */
+function allPaydays() {
+  const db = loadDB();
+  const out = new Set(currentSchedule().extra);
+  db.payments.forEach((p) => out.add(p.payday));
   return [...out].sort();
 }
 
-/** Todos los días de pago en un rango amplio, ordenados. */
-function paydaysAround(iso, yearsBack = 1, yearsFwd = 1) {
-  const y = fromISO(iso).getFullYear();
-  const s = currentSchedule();
-  const out = [];
-  for (let yy = y - yearsBack; yy <= y + yearsFwd; yy++) out.push(...paydaysOfYear(yy, s));
-  return out.sort();
+function paydaysOfYear(year) {
+  return allPaydays().filter((p) => p.startsWith(String(year)));
+}
+
+/** Compatibilidad: antes era un rango de años; ahora son todas las fechas cargadas. */
+function paydaysAround() {
+  return allPaydays();
 }
 
 function nextPayday(fromIso) {
-  return paydaysAround(fromIso).find((p) => p >= fromIso) || null;
+  return allPaydays().find((p) => p >= fromIso) || null;
 }
 
 function prevPayday(beforeIso) {
-  const all = paydaysAround(beforeIso).filter((p) => p < beforeIso);
+  const all = allPaydays().filter((p) => p < beforeIso);
   return all.length ? all[all.length - 1] : null;
 }
 
-/** Ventana que cubre un día de pago: (pago anterior, este pago]. */
+/** Ventana que cubre un día de pago: desde el pago anterior (exclusive) hasta este.
+    Para la primera fecha, desde el primer registro de horas que exista. */
 function payWindow(payday) {
   const prev = prevPayday(payday);
-  return { from: prev ? addDays(prev, 1) : addDays(payday, -34), to: payday };
-}
-
-function isManualPayday(iso) {
-  return currentSchedule().extra.includes(iso);
+  if (prev) return { from: addDays(prev, 1), to: payday };
+  const dates = loadDB().entries.map((e) => e.date).filter((d) => d <= payday).sort();
+  return { from: dates.length ? dates[0] : addDays(payday, -30), to: payday };
 }
 
 /* ---------- base de datos en memoria ---------- */
@@ -350,6 +341,8 @@ function isPaid(db, payday, staffId) {
 
 function togglePaid(db, payday, staffId) {
   if (isPaid(db, payday, staffId)) {
+    // al desmarcar, la fecha queda guardada como manual para que la fila no desaparezca
+    if (!currentSchedule().extra.includes(payday)) addExtraPayday(db, payday);
     db.payments = db.payments.filter((p) => !(p.payday === payday && p.staffId === staffId));
     Store.removePayment(payday, staffId);
   } else {
@@ -359,32 +352,28 @@ function togglePaid(db, payday, staffId) {
   }
 }
 
-/* ---------- calendario de pagos: edición ---------- */
+/* ---------- fechas de pago: edición ---------- */
 
 function saveSchedule(db, schedule) {
   db.settings.paySchedule = normalizeSchedule(schedule);
   Store.putSettings(db.settings);
 }
 
-function skipPayday(db, iso) {
-  const s = currentSchedule();
-  if (s.extra.includes(iso)) s.extra = s.extra.filter((x) => x !== iso);
-  else if (!s.skip.includes(iso)) s.skip.push(iso);
-  saveSchedule(db, s);
-}
-
-function restorePayday(db, iso) {
-  const s = currentSchedule();
-  s.skip = s.skip.filter((x) => x !== iso);
-  saveSchedule(db, s);
-}
-
 function addExtraPayday(db, iso) {
   const s = currentSchedule();
-  s.skip = s.skip.filter((x) => x !== iso);
   if (!s.extra.includes(iso)) s.extra.push(iso);
   s.extra.sort();
   saveSchedule(db, s);
+}
+
+/** Quita una fecha de pago y los pagos marcados en ella. */
+function removePayday(db, iso) {
+  const s = currentSchedule();
+  s.extra = s.extra.filter((x) => x !== iso);
+  saveSchedule(db, s);
+  db.payments.filter((p) => p.payday === iso).forEach((p) => Store.removePayment(p.payday, p.staffId));
+  db.payments = db.payments.filter((p) => p.payday !== iso);
+  saveDB();
 }
 
 /* ---------- períodos internos (vista colaboradora e insights) ---------- */
@@ -510,16 +499,12 @@ function seedDemo(db) {
     if (dow >= 1 && dow <= 5 && dayNum % 9 !== 0) db.entries.push(entryRaw(paula.id, iso, 4));
   }
 
-  // Pagos pasados marcados como hechos (el más reciente queda a medias, para mostrar el flujo)
-  const sched = normalizeSchedule(db.settings.paySchedule);
-  const y = fromISO(todayISO()).getFullYear();
-  const past = [...paydaysOfYear(y - 1, sched), ...paydaysOfYear(y, sched)]
-    .filter((p) => p < todayISO() && p >= addDays(todayISO(), -130));
-  past.forEach((payday, idx) => {
-    const team = [marta.id, sol.id, paula.id];
-    const who = idx === past.length - 1 ? team.slice(0, 2) : team;
-    who.forEach((sid) => db.payments.push({ payday, staffId: sid, paidAt: new Date().toISOString() }));
-  });
+  // Fechas de pago cargadas a mano: dos pasadas y una próxima
+  const p1 = addDays(todayISO(), -58), p2 = addDays(todayISO(), -30), p3 = addDays(todayISO(), 5);
+  db.settings.paySchedule = { extra: [p1, p2, p3] };
+  const team = [marta.id, sol.id, paula.id];
+  team.forEach((sid) => db.payments.push({ payday: p1, staffId: sid, paidAt: new Date().toISOString() }));
+  team.slice(0, 2).forEach((sid) => db.payments.push({ payday: p2, staffId: sid, paidAt: new Date().toISOString() }));
 }
 
 function addStaffRaw(db, name, color, rate) {
