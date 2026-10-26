@@ -298,27 +298,32 @@ function reservasPanel(ym) {
   const steps = `<ol class="steps">${MONTH_STEPS.map((x, i) =>
     `<li class="${i < stepIdx ? 'done' : i === stepIdx ? 'now' : ''}"><span class="step-dot"></span><span>${x.label}</span></li>`).join('')}</ol>`;
   const full = weeksOfMonth(ym).filter((w) => w.full);
+  const tw = ti.week ? ti.week.start : null;
   const chips = (sid) => full.map((w) => {
     const n = weekCount(sid, w);
     const { min } = limitsOf(sid, ym);
-    return `<span class="qw ${n >= min ? 'qw-ok' : 'qw-low'}" title="Semana del ${weekRange(w)}">${n}/${min}</span>`;
+    return `<span class="qw ${n >= min ? 'qw-ok' : 'qw-low'} ${w.start === tw ? 'qw-now' : ''}" title="Semana del ${weekRange(w)}">${n}/${min}</span>`;
   }).join('');
   const queue = ti.order.map((sid, i) => {
     const s = person(sid);
     if (!s) return '';
-    const passed = passedTurn(sid, ym) && !metMin(sid, ym);
+    const passed = tw && passedTurn(sid, ym, tw) && weekCount(sid, ti.week) < limitsOf(sid, ym).min;
     const state = !ti.open ? (metMin(sid, ym) ? 'done' : 'wait')
-      : i < ti.idx ? (passed ? 'passed' : 'done') : ti.ronda === 1 && i === ti.idx ? 'now' : 'wait';
-    const tag = state === 'done' ? '✓ mínimo cubierto' : state === 'passed'
-      ? `⏭ pasó su turno <button class="link-btn" data-act="unpass" data-sid="${sid}">devolverle el turno</button>`
+      : ti.ronda === 2 ? 'done' : i < ti.idx ? (passed ? 'passed' : 'done') : i === ti.idx ? 'now' : 'wait';
+    const tag = state === 'done' ? (ti.ronda === 1 ? '✓ eligió esta semana' : '✓ mínimo cubierto') : state === 'passed'
+      ? `⏭ pasó su turno <button class="link-btn" data-act="unpass" data-sid="${sid}" data-wk="${tw}">devolverle el turno</button>`
       : state === 'now' ? 'eligiendo ahora' : 'en espera';
     const { min, max } = limitsOf(sid, ym);
     return `<li class="q q-${state}"><span class="q-pos">${i + 1}</span>${stk(s)}
       <span class="q-name">${esc(s.name)} <small>${roleText(s)} · mín ${min} / máx ${max} por semana</small></span>
       <span class="q-weeks">${chips(sid)}</span><span class="q-tag">${tag}</span></li>`;
   }).join('');
+  const wkLine = ti.open && ti.weeks.length ? `<div class="wk-turns">${ti.weeks.map((w, j) => {
+      const st = !tw || w.start < tw ? 'ok' : w.start === tw ? 'now' : 'wait';
+      return `<span class="wkt wkt-${st}">${st === 'ok' ? '✓ ' : ''}Semana ${j + 1} · ${weekRange(w)}${st === 'now' ? ' · eligiendo' : st === 'ok' ? ' · libre' : ''}</span>`;
+    }).join('')}</div>` : '';
   const r2 = `<li class="q q-${ti.open && ti.ronda === 2 ? 'now' : 'wait'} q-r2"><span class="q-pos">${icon('users')}</span>
-    <span class="q-name">Ronda 2 <small>todas suman hasta su máximo semanal</small></span>
+    <span class="q-name">Ronda 2 <small>cuando terminan todas las semanas: todas suman hasta su máximo, también los días sueltos</small></span>
     <span class="q-tag">${ti.open && ti.ronda === 2 ? 'abierta' : 'después'}</span></li>`;
   const shadows = ranked().filter((s) => s.canSh);
   const shRow = shadows.length ? `<li class="q q-sh"><span class="q-pos sh-slot">S</span>
@@ -340,9 +345,10 @@ function reservasPanel(ym) {
   return `<section class="card">
     <h2 class="card-title">${icon('users')} Reservas de ${monthName(ym)}</h2>
     ${steps}${prepHint}
-    <p class="hint">Los bloques de titular se eligen por turnos, en el orden de <b>Equipo</b>: en su turno, cada una toma <b>hasta su mínimo</b>
-      de cada semana; el resto, hasta el máximo, en la ronda 2. Cada cuadradito es una semana completa (reservas / mínimo).
-      Los lugares de shadow no esperan turno. Nadie puede tomar dos bloques el mismo día.</p>
+    <p class="hint">Los bloques de titular se eligen por turnos, <b>semana por semana</b>, en el orden de <b>Equipo</b>: en su turno, cada una toma
+      <b>hasta su mínimo</b> de esa semana. Cuando eligieron todas, esa semana queda libre hasta el máximo y empieza la siguiente.
+      Cada cuadradito es una semana completa (reservas / mínimo). Los lugares de shadow no esperan turno. Nadie puede tomar dos bloques el mismo día.</p>
+    ${wkLine}
     ${ti.order.length ? `<ol class="queue">${queue}${r2}${shRow}</ol>` : '<p class="muted">Todavía no hay nadie en el equipo que pueda ir de titular.</p>'}
     <div class="btn-row">${actions}</div>
   </section>`;
@@ -450,18 +456,19 @@ function blockModal(d, b) {
 
   const booked = [a.tit, a.sh].filter(Boolean);
   const exList = D.extras.filter((e) => e.date === d && e.b === b);
-  const exRows = exList.map((e) => `<li>${stk(person(e.sid), { small: true })}<span><b>+${fmtNum(e.h)} h</b> · ${esc(e.motivo)}</span>
-      ${e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">rechazada</span>'
+  const exRows = exList.map((e) => `<li>${stk(person(e.sid), { small: true })}<span><b>${fmtSigned(e.h)}</b> · ${esc(e.motivo)}</span>
+      ${e.h < 0 ? '<span class="chip chip-soft">descontada</span>' : e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">rechazada</span>'
         : `<button class="btn btn-mini btn-ghost" data-act="ex-no" data-id="${e.id}">Rechazar</button>
            <button class="btn btn-mini btn-primary" data-act="ex-ok" data-id="${e.id}">Aprobar</button>`}</li>`).join('');
-  const exSec = canMark && booked.length ? `<div class="ex-sec"><h4>${icon('clock')} Horas extra en este bloque</h4>
-      ${exRows ? `<ul class="ex-list">${exRows}</ul>` : '<p class="hint">Sin horas extra.</p>'}
+  const exSec = canMark && booked.length ? `<div class="ex-sec"><h4>${icon('clock')} Horas extra o descontadas en este bloque</h4>
+      ${exRows ? `<ul class="ex-list">${exRows}</ul>` : '<p class="hint">Sin cambios de horas.</p>'}
       <div class="ex-add">
         <select class="input" id="ex-sid" aria-label="Persona">${booked.map((x) => `<option value="${x.sid}">${esc((person(x.sid) || {}).name || '—')}</option>`).join('')}</select>
         <input class="input" id="ex-h" type="number" min="0.5" max="6" step="0.5" value="1" aria-label="Horas">
         <input class="input" id="ex-m" type="text" maxlength="80" placeholder="Motivo (opcional)" aria-label="Motivo">
         <button class="btn btn-mini" data-act="ex-add" data-d="${d}" data-b="${b}">${icon('plus')} Sumar</button>
-      </div></div>` : '';
+        <button class="btn btn-mini btn-ghost" data-act="ex-sub" data-d="${d}" data-b="${b}">− Restar</button>
+      </div><p class="hint">Restar sirve, por ejemplo, si se fue antes. Se descuenta de las horas ya cargadas de ese bloque.</p></div>` : '';
   const closeBtn = !booked.length ? `<button class="btn btn-ghost" data-act="blk-close" data-d="${d}" data-b="${b}">Cerrar este bloque</button>` : '';
   openModal(head + titSec + shSec + exSec + `<div class="modal-actions">${closeBtn}<button class="btn btn-primary" data-act="modal-close">Listo</button></div>`);
 }
@@ -559,7 +566,7 @@ function liqView() {
       <td>${stk(r.s, { small: true })} ${esc(r.s.name)}</td>
       <td class="num">${r.asist} · ${fmtNum(r.hAsist)} h</td>
       <td class="num">${r.hParc ? fmtNum(r.hParc) + ' h' : '—'}</td>
-      <td class="num">${r.hEx ? '+' + fmtNum(r.hEx) + ' h' : '—'}${r.pend ? ` <span class="chip st-warn">${r.pend} pend.</span>` : ''}</td>
+      <td class="num">${r.hEx ? fmtSigned(r.hEx) : '—'}${r.pend ? ` <span class="chip st-warn">${r.pend} pend.</span>` : ''}</td>
       <td class="num">${r.faltas || '—'}</td>
       <td class="num">${r.sin ? `<span class="chip st-warn">${r.sin}</span>` : '—'}</td>
       <td class="num strong">${fmtNum(r.h)} h</td>
@@ -626,20 +633,22 @@ function turnBanner(s, ym) {
   const shNote = s.canSh ? ' Los lugares de shadow los podés tomar cuando quieras, sin esperar turno.' : '';
   if (ti.ronda === 1) {
     const pos = ti.order.indexOf(s.id);
+    const wn = ti.weeks.indexOf(ti.week) + 1;
+    const semana = `la <b>semana ${wn}</b> (del ${weekRange(ti.week)})`;
+    const libres = wn > 1 ? ` Las semanas anteriores ya están libres: ahí podés sumar hasta tu máximo (${max}).` : '';
     if (ti.current === s.id) {
-      return banner('go', `<b>¡Es tu turno!</b> Elegí <b>${min} ${que} por semana</b>, tu mínimo. Cuando lo cubras en todas las semanas, le toca a la siguiente;
-        hasta tu máximo (${max}) vas a poder sumar en la ronda 2.${shNote}
-        <div class="pass-row"><span>¿No podés completar el mínimo?</span>
-          <button class="btn btn-mini btn-ghost" data-act="pass-turn" data-ym="${ym}">${icon('arrow-right')} Pasar mi turno</button></div>`);
+      return banner('go', `<b>¡Es tu turno en ${semana}!</b> Elegí <b>${min} ${que}</b> en esa semana, tu mínimo. Cuando lo cubras, le toca a la siguiente.${libres}${shNote}
+        <div class="pass-row"><span>¿No podés completar el mínimo de esta semana?</span>
+          <button class="btn btn-mini btn-ghost" data-act="pass-turn" data-ym="${ym}" data-wk="${ti.week.start}">${icon('arrow-right')} Pasar mi turno</button></div>`);
     }
-    if (pos > -1 && pos < ti.idx && passedTurn(s.id, ym) && !metMin(s.id, ym)) {
-      return banner('done', `<b>Pasaste tu turno.</b> Cuando todas terminen se abre la ronda 2 y vas a poder sumar hasta ${max} por semana.${shNote}`);
+    if (pos > -1 && pos < ti.idx) {
+      const msg = passedTurn(s.id, ym, ti.week.start) && weekCount(s.id, ti.week) < min ? 'Pasaste tu turno' : 'Ya elegiste';
+      return banner('done', `<b>${msg} en ${semana}.</b> Cuando todas elijan, sigue la semana siguiente.${libres}${shNote}`);
     }
-    if (pos > -1 && pos < ti.idx) return banner('done', `<b>Ya cubriste tu mínimo.</b> Cuando todas terminen se abre la ronda 2 y vas a poder sumar hasta ${max} por semana.${shNote}`);
     const ahead = pos > -1 ? pos - ti.idx : 0;
-    return banner('wait', `<b>Todavía no es tu turno.</b> ${ahead === 1 ? 'Falta 1 persona' : `Faltan ${ahead} personas`} antes que vos. Mientras, podés mirar qué queda libre.${shNote}`);
+    return banner('wait', `<b>Se está eligiendo ${semana}.</b> ${ahead === 1 ? 'Falta 1 persona' : `Faltan ${ahead} personas`} antes que vos. Mientras, podés mirar qué queda libre.${libres}${shNote}`);
   }
-  return banner('go', `<b>Ronda 2 abierta.</b> Podés sumar ${que} hasta tu máximo de ${max} por semana.${shNote}`);
+  return banner('go', `<b>Ronda 2 abierta.</b> Ya eligieron todas en todas las semanas: podés sumar ${que} hasta tu máximo de ${max} por semana, también en los días sueltos.${shNote}`);
 }
 
 function pillState(s, d, b) {
@@ -672,7 +681,8 @@ function agButton(s, d, b) {
 function reservarView(s) {
   const ym = reservingMonth();
   const weeks = weeksOfMonth(ym);
-  if (U.cWeek === null) U.cWeek = Math.max(0, weeks.findIndex((w) => w.full));
+  const tiW = turnInfo(ym).week;
+  if (U.cWeek === null) U.cWeek = Math.max(0, tiW ? weeks.findIndex((w) => w.start === tiW.start) : weeks.findIndex((w) => w.full));
   const i = clamp(U.cWeek, 0, weeks.length - 1);
   const w = weeks[i];
   const n = weekCount(s.id, w);
@@ -681,8 +691,9 @@ function reservarView(s) {
     const c = weekCount(s.id, x);
     const st = !x.full ? 'part' : c >= min ? 'ok' : 'low';
     const days = x.days.length === 1 ? `${Number(x.days[0].slice(8))}` : `${Number(x.days[0].slice(8))}–${Number(x.days[x.days.length - 1].slice(8))}`;
-    return `<button class="wkc wkc-${st} ${j === i ? 'on' : ''}" data-act="cweek-go" data-i="${j}" aria-label="Semana del ${weekRange(x)}: ${c} reservas">
-      <b>${c}${x.full ? `<small>/${min}</small>` : ''}</b><span>${days}</span></button>`;
+    const turn = tiW && x.start === tiW.start;
+    return `<button class="wkc wkc-${st} ${j === i ? 'on' : ''} ${turn ? 'wkc-turn' : ''}" data-act="cweek-go" data-i="${j}" aria-label="Semana del ${weekRange(x)}: ${c} reservas${turn ? ', en turno' : ''}">
+      <b>${c}${x.full ? `<small>/${min}</small>` : ''}</b><span>${days}</span>${turn ? '<em>turno</em>' : ''}</button>`;
   }).join('')}</div>`;
   const rows = w.days.map((d) => `<div class="ag-day">
       <div class="ag-date"><b>${DOW_SHORT[fromISO(d).getDay()]}</b><span>${Number(d.slice(8))}</span></div>
@@ -773,9 +784,9 @@ function myLiqView(s) {
   }).join('');
   const ex = D.extras.filter((e) => e.sid === s.id && ymOf(e.date) === ym)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => `<tr><td>${esc(dayLabel(e.date))}</td><td>Extra · ${BLOCKS[e.b].label.toLowerCase()}</td>
-      <td>${e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">no aprobada</span>' : '<span class="chip st-warn">pendiente</span>'}</td>
-      <td class="num">+${fmtNum(e.h)} h</td><td class="num">${e.estado === 'ok' ? fmtMoney(e.h * rateFor(s, e.date)) : '—'}</td></tr>`).join('');
+    .map((e) => `<tr><td>${esc(dayLabel(e.date))}</td><td>${e.h < 0 ? 'Descuento' : 'Extra'} · ${BLOCKS[e.b].label.toLowerCase()}</td>
+      <td>${e.h < 0 ? '<span class="chip chip-soft">descontada</span>' : e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">no aprobada</span>' : '<span class="chip st-warn">pendiente</span>'}</td>
+      <td class="num">${fmtSigned(e.h)}</td><td class="num">${e.estado === 'ok' ? fmtMoney(e.h * rateFor(s, e.date)) : '—'}</td></tr>`).join('');
   const hasRate = Array.isArray(s.rates) && s.rates.length;
   const rateTxt = hasRate ? `${fmtMoney(rateFor(s, `${ym}-28`))} por hora` : 'sin tarifa cargada';
   return `<div class="liq-head">${monthNav(ym, 'mylmonth')}</div>
@@ -789,7 +800,7 @@ function myLiqView(s) {
     <div class="ph-stats ph-stats-4">
       <div class="card kpi"><span class="kpi-label">Asistidos</span><span class="kpi-num">${r.asist}</span></div>
       <div class="card kpi"><span class="kpi-label">Parciales</span><span class="kpi-num">${fmtNum(r.hParc)} h</span></div>
-      <div class="card kpi"><span class="kpi-label">Extras</span><span class="kpi-num">${fmtNum(r.hEx)} h</span></div>
+      <div class="card kpi"><span class="kpi-label">Extras</span><span class="kpi-num">${r.hEx ? fmtSigned(r.hEx) : '0 h'}</span></div>
       <div class="card kpi"><span class="kpi-label">Faltas</span><span class="kpi-num">${r.faltas}</span></div>
     </div>
     ${r.sin ? banner('info', `${plural(r.sin, 'bloque todavía no tiene', 'bloques todavía no tienen')} el presente tomado: se suma cuando la administración lo marque.`) : ''}
@@ -813,8 +824,8 @@ function collabBlockModal(d, b) {
   const st = statusOf(bk);
   const worked = ['asistio', 'parcial', 'sinmarcar'].includes(st) || (st === 'hoy' && hoursUntil(d, b) <= 0);
   const myEx = D.extras.filter((e) => e.date === d && e.b === b && e.sid === sid);
-  const exRows = myEx.map((e) => `<li><b>+${fmtNum(e.h)} h</b> · ${esc(e.motivo)}
-      ${e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">no aprobada</span>' : '<span class="chip st-warn">pendiente</span>'}</li>`).join('');
+  const exRows = myEx.map((e) => `<li><b>${fmtSigned(e.h)}</b> · ${esc(e.motivo)}
+      ${e.h < 0 ? '<span class="chip chip-soft">descontada</span>' : e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">no aprobada</span>' : '<span class="chip st-warn">pendiente</span>'}</li>`).join('');
   const exForm = worked ? `<div class="ex-sec"><h4>${icon('clock')} ¿Te quedaste más tiempo?</h4>
       ${exRows ? `<ul class="ex-list">${exRows}</ul>` : ''}
       <div class="ex-add">
@@ -904,7 +915,12 @@ async function reserve(d, b) {
   const ti = turnInfo(ym);
   if (own) {
     if (!ti.open) return toast('Las reservas están cerradas. Para cambios, avisale a la administración.', 'err');
-    if (own.role === 'titular' && ti.ronda === 1 && ti.current !== s.id) return toast('Podés quitar bloques de titular durante tu turno o en la ronda 2.', 'err');
+    if (own.role === 'titular' && ti.ronda === 1) {
+      const ow = weekOf(d);
+      const inTurn = ow.full && ow.start === ti.week.start && ti.current === s.id;
+      const before = ow.full && ow.start < ti.week.start && weekCount(s.id, ow) - 1 >= limitsOf(s.id, ym).min;
+      if (!inTurn && !before) return toast('Ese bloque lo podés soltar durante tu turno de esa semana o en la ronda 2.', 'err');
+    }
     await Store.removeBooking(own.id);
     const w = weekOf(d);
     const { min } = limitsOf(s.id, ym);
@@ -916,12 +932,14 @@ async function reserve(d, b) {
   }
   const c = canBook(s.id, d, b);
   if (!c.ok) return toast(c.why, 'err');
-  const before = ti.idx;
+  const before = ti.ronda === 1 ? `${ti.week.start}_${ti.idx}` : 'r2';
   await Store.addBooking({ id: bookingId(d, b, c.role), date: d, b, role: c.role, sid: s.id, month: ym });
   const after = turnInfo(ym);
-  if (c.role === 'titular' && after.idx !== before) {
-    toast(after.ronda === 2 ? '¡Cubriste tu mínimo! Se abrió la ronda 2: todas pueden sumar hasta su máximo.'
-      : '¡Cubriste tu mínimo de todas las semanas! Ahora le toca a la siguiente persona.', 'ok');
+  const now = after.ronda === 1 ? `${after.week.start}_${after.idx}` : 'r2';
+  if (c.role === 'titular' && ti.ronda === 1 && now !== before) {
+    toast(after.ronda === 2 ? '¡Cubriste tu mínimo! Terminaron los turnos: se abrió la ronda 2.'
+      : after.week.start !== ti.week.start ? `¡Cubriste tu mínimo! Arrancan los turnos de la semana del ${weekRange(after.week)}.`
+      : '¡Cubriste tu mínimo de esta semana! Ahora le toca a la siguiente persona.', 'ok');
   } else toast(`Reservado${c.role === 'shadow' ? ' de shadow' : ''}: ${dayLabel(d)}, ${BLOCKS[b].label.toLowerCase()}`, 'ok');
 }
 
@@ -941,21 +959,22 @@ const handlers = {
   'demo-reset': () => { Store.demoReset(); toast('Demo reiniciada'); },
   mylmonth: (el) => { U.myLiqMonth = addMonths(U.myLiqMonth, Number(el.dataset.d)); render(); },
   'pass-turn': (el) => {
-    const ym = el.dataset.ym;
+    const { ym, wk } = el.dataset;
     const { min } = limitsOf(Store.mySid, ym);
-    openModal(`<h3>¿Pasar tu turno?</h3>
-      <p class="muted">Le toca elegir a la siguiente persona. Lo que ya reservaste queda igual, y en la ronda 2 vas a poder sumar más bloques si quedan libres.
+    openModal(`<h3>¿Pasar tu turno de esta semana?</h3>
+      <p class="muted">Le toca elegir a la siguiente persona en la semana del ${weekRange(weekOf(wk))}. Lo que ya reservaste queda igual,
+        y cuando todas elijan vas a poder sumar más bloques si quedan libres. En las semanas siguientes vas a tener tu turno igual.
         Tu mínimo es ${min} por semana: la administración va a ver que pasaste el turno sin completarlo.</p>
       <div class="modal-actions"><button class="btn btn-ghost" data-act="modal-close">Cancelar</button>
-        <button class="btn btn-primary" data-act="pass-turn-ok" data-ym="${ym}">Sí, pasar mi turno</button></div>`);
+        <button class="btn btn-primary" data-act="pass-turn-ok" data-ym="${ym}" data-wk="${wk}">Sí, pasar mi turno</button></div>`);
   },
   async 'pass-turn-ok'(el) {
-    await Store.passTurn(el.dataset.ym, Store.mySid);
+    await Store.passTurn(el.dataset.ym, Store.mySid, el.dataset.wk);
     closeModal();
-    toast('Pasaste tu turno. Le toca a la siguiente persona.', 'ok');
+    toast('Pasaste tu turno de esta semana. Le toca a la siguiente persona.', 'ok');
   },
   async unpass(el) {
-    await Store.unpassTurn(U.planMonth, el.dataset.sid);
+    await Store.unpassTurn(U.planMonth, el.dataset.sid, el.dataset.wk);
     const p = person(el.dataset.sid);
     toast(`${p ? p.name : ''} recuperó su turno`, 'ok');
   },
@@ -1049,6 +1068,21 @@ const handlers = {
       motivo: document.getElementById('ex-m').value.trim().slice(0, 80) || 'Cargada por la administración', by: 'admin', estado: 'ok' });
     toast(`+${fmtNum(h)} h extra sumadas`, 'ok'); refreshModal();
   },
+  async 'ex-sub'(el) {
+    const { d, b } = el.dataset;
+    const sid = document.getElementById('ex-sid').value;
+    const h = Number(document.getElementById('ex-h').value);
+    if (!(h > 0 && h <= 6)) return toast('Ingresá entre 0,5 y 6 horas', 'err');
+    const bk = mine(sid, d, b);
+    const base = bk && bk.att && ['asistio', 'parcial'].includes(bk.att.st) ? bk.att.h : 0;
+    const tiene = base + D.extras.filter((e) => e.sid === sid && e.date === d && e.b === b && e.estado === 'ok').reduce((a, e) => a + e.h, 0);
+    if (h > tiene) {
+      return toast(tiene > 0 ? `Solo se pueden restar hasta ${fmtNum(tiene)} h en este bloque` : 'Primero tomá el presente: no hay horas cargadas para restar', 'err');
+    }
+    await Store.addExtra({ id: uid(), date: d, b, sid, h: -h,
+      motivo: document.getElementById('ex-m').value.trim().slice(0, 80) || 'Descontada por la administración', by: 'admin', estado: 'ok' });
+    toast(`−${fmtNum(h)} h descontadas`, 'ok'); refreshModal();
+  },
   async 'ex-ok'(el) { await Store.updateExtra(el.dataset.id, { estado: 'ok' }); toast('Horas extra aprobadas', 'ok'); refreshModal(); },
   async 'ex-no'(el) { await Store.updateExtra(el.dataset.id, { estado: 'rej' }); toast('Horas extra rechazadas', 'info'); refreshModal(); },
 
@@ -1062,7 +1096,7 @@ const handlers = {
   async 'skip-turn'() {
     const ti = turnInfo(U.planMonth);
     if (ti.ronda !== 1) return;
-    await Store.passTurn(U.planMonth, ti.current);
+    await Store.passTurn(U.planMonth, ti.current, ti.week.start);
     const p = person(ti.current);
     toast(`Pasaste el turno${p ? ' de ' + p.name : ''}`, 'info');
   },

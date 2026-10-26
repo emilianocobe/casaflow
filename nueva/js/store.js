@@ -15,7 +15,7 @@
      hogares/{hid}/reservas/{fecha_B_R}  R = T (titular) o S (shadow); presente en "att"
      hogares/{hid}/extras/{id}           horas extra (pend / ok / rej)
      hogares/{hid}/pagos/{YYYY-MM_sid}   pago del mes marcado por la administración
-     hogares/{hid}/pases/{YYYY-MM_sid}   la persona pasó su turno sin completar el mínimo
+     hogares/{hid}/pases/{YYYY-MM_semana_sid}   la persona pasó su turno de esa semana sin completar el mínimo
      invitaciones/{email}                a qué hogar y ficha pertenece cada mail
    ========================================================= */
 
@@ -88,7 +88,7 @@ const Store = (() => {
     if (pLiT[2]) data.extras.push({ id: 'x2', date: pLiT[2].date, b: 'T', sid: 'li', h: 1.5, motivo: 'Me quedé a terminar el planchado', by: 'collab', estado: 'pend' });
     data.months[live] = { status: 'cerrado' };
 
-    // mes siguiente: reservas abiertas; Josefina ya cubrió su mínimo
+    // mes siguiente: reservas abiertas; en la 1.ª semana Josefina y Lilian ya eligieron, le toca a Micaela
     const full = weeksOfMonth(plan).filter((w) => w.full);
     full.forEach((w) => w.days.forEach((d) => {
       const dow = fromISO(d).getDay();
@@ -139,8 +139,8 @@ const Store = (() => {
     async addExtra(e) { D.extras.push(e); },
     async updateExtra(id, p) { const e = D.extras.find((x) => x.id === id); if (e) Object.assign(e, p); },
     async setPago(key, data) { if (data) D.pagos[key] = data; else delete D.pagos[key]; },
-    async passTurn(ym, sid) { D.pases = D.pases || {}; D.pases[`${ym}_${sid}`] = { at: new Date().toISOString() }; },
-    async unpassTurn(ym, sid) { if (D.pases) delete D.pases[`${ym}_${sid}`]; },
+    async passTurn(ym, sid, wk) { D.pases = D.pases || {}; D.pases[`${ym}_${wk}_${sid}`] = { month: ym, week: wk, staffId: sid, at: new Date().toISOString() }; },
+    async unpassTurn(ym, sid, wk) { if (D.pases) delete D.pases[`${ym}_${wk}_${sid}`]; },
   };
 
   // envuelve cada escritura demo: guarda y avisa
@@ -303,10 +303,10 @@ const Store = (() => {
     setPago: (key, data) => (data
       ? col('pagos').doc(key).set(data)
       : col('pagos').doc(key).delete()),
-    passTurn: (ym, sid) => col('pases').doc(`${ym}_${sid}`).set({
-      month: ym, staffId: sid, at: firebase.firestore.FieldValue.serverTimestamp(),
+    passTurn: (ym, sid, wk) => col('pases').doc(`${ym}_${wk}_${sid}`).set({
+      month: ym, week: wk, staffId: sid, at: firebase.firestore.FieldValue.serverTimestamp(),
     }),
-    unpassTurn: (ym, sid) => col('pases').doc(`${ym}_${sid}`).delete(),
+    unpassTurn: (ym, sid, wk) => col('pases').doc(`${ym}_${wk}_${sid}`).delete(),
   };
 
   /* =================== interfaz pública =================== */

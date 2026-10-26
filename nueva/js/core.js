@@ -45,6 +45,8 @@ const fmtMoney = (n) => new Intl.NumberFormat('es-AR', {
   style: 'currency', currency: 'ARS', minimumFractionDigits: 0, maximumFractionDigits: 2,
 }).format(n || 0);
 const fmtNum = (n) => new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(n || 0);
+/** Horas con signo: +1,5 h (extra) o −1 h (descuento). */
+const fmtSigned = (h) => `${h < 0 ? '−' : '+'}${fmtNum(Math.abs(h))} h`;
 const fmtDateLong = (iso) => new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(fromISO(iso));
 const fmtDateShort = (iso) => new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short' }).format(fromISO(iso));
 const fmtDateFull = (iso) => new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(fromISO(iso));
@@ -129,9 +131,9 @@ const EMPTY_DATA = () => ({
   months: {},      // ym -> {status, order:[sid], mins:{sid:n}, maxs:{sid:n}, turnFloor}
   blocks: {},      // 'YYYY-MM-DD_B' -> {closed, shadow}
   bookings: [],    // {id, date, b, role, sid, month, att:{st,h}|null}
-  extras: [],      // {id, date, b, sid, h, motivo, by, estado:'pend'|'ok'|'rej'}
+  extras: [],      // {id, date, b, sid, h, motivo, by, estado:'pend'|'ok'|'rej'}  (h < 0 = horas descontadas)
   pagos: {},       // 'YYYY-MM_sid' -> {paidAt, staffId, month}
-  pases: {},       // 'YYYY-MM_sid' -> {at}  (pasó su turno sin completar el mínimo)
+  pases: {},       // 'YYYY-MM_semana_sid' -> {month, week, at}  (pasó su turno de esa semana sin completar el mínimo)
 });
 
 let D = EMPTY_DATA();
@@ -181,17 +183,29 @@ function turnOrder(ym) {
   return ranked().filter((s) => s.canTit).map((s) => s.id);
 }
 
-/** ¿La persona pasó su turno de ese mes (por no poder completar el mínimo)? */
-const passedTurn = (sid, ym) => !!(D.pases && D.pases[`${ym}_${sid}`]);
+/** ¿La persona pasó su turno de esa semana (por no poder completar el mínimo)? */
+const passedTurn = (sid, ym, wk) => !!(D.pases && D.pases[`${ym}_${wk}_${sid}`]);
+/** En esa semana, ¿ya terminó su turno? (cubrió el mínimo o lo pasó) */
+const doneWeek = (sid, ym, w) => weekCount(sid, w) >= limitsOf(sid, ym).min || passedTurn(sid, ym, w.start);
 
+/** Semanas que se eligen por turnos: las completas que todavía no terminaron. */
+const turnWeeks = (ym) => weeksOfMonth(ym).filter((w) => w.full && w.days[6] >= todayISO());
+
+/**
+ * Turnos semana por semana: en la primera semana pendiente eligen en orden, cada una hasta su mínimo;
+ * cuando pasaron todas, esa semana queda libre hasta el máximo y sigue la próxima.
+ * Al terminar todas las semanas se abre la ronda 2 (incluye los días sueltos de inicio y fin de mes).
+ */
 function turnInfo(ym) {
   const mo = monthDoc(ym);
   const order = turnOrder(ym);
-  if (mo.status !== 'reservas') return { open: false, ronda: 0, current: null, idx: 0, order };
-  let i = mo.turnFloor || 0;
-  while (i < order.length && (metMin(order[i], ym) || passedTurn(order[i], ym))) i++;
-  const ronda = i < order.length ? 1 : 2;
-  return { open: true, ronda, current: ronda === 1 ? order[i] : null, idx: i, order };
+  const weeks = turnWeeks(ym);
+  if (mo.status !== 'reservas') return { open: false, ronda: 0, current: null, idx: 0, order, week: null, weeks };
+  for (const w of weeks) {
+    const i = order.findIndex((sid) => !doneWeek(sid, ym, w));
+    if (i > -1) return { open: true, ronda: 1, current: order[i], idx: i, order, week: w, weeks };
+  }
+  return { open: true, ronda: 2, current: null, idx: order.length, order, week: null, weeks };
 }
 
 /** Con qué rol entraría la persona a ese bloque (o null si no puede). */
@@ -219,16 +233,22 @@ function canBook(sid, d, b) {
     return { ok: false, why: 'Ocupado' };
   }
   const ti = turnInfo(ym);
-  if (role === 'titular' && ti.ronda === 1 && ti.current !== sid) {
-    const pos = ti.order.indexOf(sid);
-    return { ok: false, why: pos > -1 && pos < ti.idx
-      ? 'Ya cubriste tu mínimo: vas a poder sumar más en la ronda 2'
-      : 'Todavía no es tu turno' };
-  }
   const { min, max } = limitsOf(sid, ym);
-  const n = weekCount(sid, weekOf(d));
-  if (role === 'titular' && ti.ronda === 1 && n >= min) {
-    return { ok: false, why: `En tu turno podés tomar hasta tu mínimo (${min}) por semana. El resto, en la ronda 2.` };
+  const w = weekOf(d);
+  const n = weekCount(sid, w);
+  if (role === 'titular' && ti.ronda === 1) {
+    if (!w.full) return { ok: false, why: 'Los días sueltos de inicio y fin de mes se abren cuando terminen los turnos de todas las semanas' };
+    if (w.start > ti.week.start) return { ok: false, why: `Esa semana todavía no se abrió: ahora se elige la semana del ${weekRange(ti.week)}` };
+    if (w.start === ti.week.start) {
+      if (ti.current !== sid) {
+        const pos = ti.order.indexOf(sid);
+        return { ok: false, why: pos > -1 && pos < ti.idx
+          ? 'Ya terminaste tu turno de esta semana: cuando todas elijan, vas a poder sumar hasta tu máximo'
+          : 'Todavía no es tu turno en esta semana' };
+      }
+      if (n >= min) return { ok: false, why: `En tu turno podés tomar hasta tu mínimo (${min}) en esta semana. El resto, cuando todas hayan elegido.` };
+    }
+    // semanas anteriores: ya eligieron todas, quedan libres hasta el máximo
   }
   if (n >= max) return { ok: false, why: `Llegaste a tu máximo de ${max} por semana` };
   return { ok: true, role };

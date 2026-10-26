@@ -272,15 +272,17 @@ service cloud.firestore {
         allow update, delete: if esAdmin(hid);
       }
 
-      // pases de turno: id = mes_persona. Ella solo puede pasar SU turno, en un mes con reservas abiertas.
+      // pases de turno: id = mes_semana_persona. Ella solo puede pasar SU turno, en un mes con reservas abiertas.
       match /pases/{pid} {
         allow read: if esAdmin(hid) || esMiembro(hid);
         allow create: if esAdmin(hid)
           || (esMiembro(hid)
-              && request.resource.data.keys().hasOnly(['month', 'staffId', 'at'])
+              && request.resource.data.keys().hasOnly(['month', 'week', 'staffId', 'at'])
               && request.resource.data.staffId == miSid()
               && request.resource.data.month is string
-              && pid == request.resource.data.month + '_' + miSid()
+              && request.resource.data.week is string
+              && request.resource.data.week.matches('^' + request.resource.data.month + '-[0-9]{2}$')
+              && pid == request.resource.data.month + '_' + request.resource.data.week + '_' + miSid()
               && mes(hid, request.resource.data.month).data.status == 'reservas');
         allow update, delete: if esAdmin(hid);
       }

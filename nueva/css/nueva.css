@@ -158,6 +158,9 @@
 .wkc-low { background: #fff1db; color: #8a5300; }
 .wkc-part { background: var(--bg-soft); color: var(--ink-faint); }
 .wkc.on { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+.wkc { position: relative; }
+.wkc em { position: absolute; top: -7px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 0.55rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.04em; background: var(--accent); color: #fff; border-radius: 6px; padding: 0 4px; line-height: 1.4; }
 
 .sticky-bar {
   position: sticky; bottom: 0; z-index: 3;
@@ -244,6 +247,11 @@
 }
 .qw-ok { background: var(--ok-soft); color: var(--ok-ink); }
 .qw-low { background: #fff1db; color: #8a5300; }
+.qw-now { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wk-turns { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.wkt { font-size: 0.75rem; font-weight: 700; padding: 4px 9px; border-radius: 999px; background: var(--bg-soft); color: var(--ink-faint); }
+.wkt-ok { background: var(--ok-soft); color: var(--ok-ink); }
+.wkt-now { background: var(--accent); color: #fff; }
 .q-sh { border-color: #b9d3f2; background: #f5f9fe; }
 .q-sh .q-pos.sh-slot { width: 26px; height: 26px; font-size: 0.72rem; }
 .q-sh .q-tag { color: #2f6db5; }
