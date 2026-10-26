@@ -108,7 +108,9 @@ service cloud.firestore {
 
     // =====================================================================
     // APP NUEVA (bloques) · colecciones separadas: hogares/ e invitaciones/
-    // - La administración (ownerUid) ve y edita todo lo de su hogar.
+    // - La administración (la dueña, ownerUid, y las administradoras que ella
+    //   invita: invitaciones/{email} con role 'admin') ve y edita todo lo de su hogar.
+    //   Solo la dueña puede sumar o quitar administradoras.
     // - Una colaboradora ve su ficha, los meses, los bloques y la ocupación
     //   (reservas sin nombres: solo un id). Reserva SOLO a su nombre, en meses
     //   con reservas abiertas, con su permiso de titular o de shadow. Libera o
@@ -119,7 +121,7 @@ service cloud.firestore {
       return get(/databases/$(db)/documents/hogares/$(hid));
     }
 
-    function esAdmin(hid) {
+    function esDuena(hid) {
       return signedIn() && hogar(hid).data.ownerUid == request.auth.uid;
     }
 
@@ -131,8 +133,17 @@ service cloud.firestore {
       return myEmail() != '' && exists(/databases/$(db)/documents/invitaciones/$(myEmail()));
     }
 
+    function esInvAdmin(d) {
+      return d.get('role', '') == 'admin';
+    }
+
+    function esAdmin(hid) {
+      return esDuena(hid)
+        || (signedIn() && tieneInvitacion() && invitacion().data.hid == hid && esInvAdmin(invitacion().data));
+    }
+
     function esMiembro(hid) {
-      return signedIn() && tieneInvitacion() && invitacion().data.hid == hid;
+      return signedIn() && tieneInvitacion() && invitacion().data.hid == hid && !esInvAdmin(invitacion().data);
     }
 
     function miSid() {
@@ -196,29 +207,36 @@ service cloud.firestore {
     }
 
     // ---- invitaciones de la app nueva
+    // (las de colaboradora las maneja cualquier administradora; las de administradora, solo la dueña)
     match /invitaciones/{email} {
       allow read: if signedIn()
-        && (myEmail() == email || resource.data.ownerUid == request.auth.uid);
+        && (myEmail() == email || resource.data.ownerUid == request.auth.uid || esAdmin(resource.data.hid));
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.staffId is string
-        && esAdmin(request.resource.data.hid);
+        && esAdmin(request.resource.data.hid)
+        && (esInvAdmin(request.resource.data)
+              ? esDuena(request.resource.data.hid) && email != myEmail()
+              : request.resource.data.staffId is string);
       allow update: if signedIn()
-        && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
-        && esAdmin(request.resource.data.hid);
+        && request.resource.data.hid == resource.data.hid
+        && esAdmin(resource.data.hid)
+        && ((!esInvAdmin(resource.data) && !esInvAdmin(request.resource.data) && request.resource.data.staffId is string)
+            || esDuena(resource.data.hid));
       allow delete: if signedIn()
-        && (resource == null || resource.data.ownerUid == request.auth.uid);
+        && (resource == null
+            || (esAdmin(resource.data.hid) && (!esInvAdmin(resource.data) || esDuena(resource.data.hid))));
     }
 
     // ---- hogares de la app nueva
     match /hogares/{hid} {
       allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow read: if signedIn()
-        && (resource.data.ownerUid == request.auth.uid || esMiembro(hid));
+        && (resource.data.ownerUid == request.auth.uid || esMiembro(hid) || esAdmin(hid));
       allow update: if esAdmin(hid)
-        && request.resource.data.ownerUid == resource.data.ownerUid;
-      allow delete: if esAdmin(hid);
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && (esDuena(hid) || request.resource.data.get('admins', {}) == resource.data.get('admins', {}));
+      allow delete: if esDuena(hid);   // borrar la casa entera: solo quien la creó
 
       // ficha: la administración ve todas; cada colaboradora solo la suya
       match /equipo/{sid} {

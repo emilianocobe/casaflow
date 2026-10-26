@@ -7,7 +7,7 @@
      - 'demo' : datos de ejemplo en este navegador (?demo en la URL).
 
    Modelo en Firestore:
-     hogares/{hid}                       nombre, dueño (ownerUid)
+     hogares/{hid}                       nombre, dueño (ownerUid), admins {email: {name}} (para mostrar)
      hogares/{hid}/equipo/{sid}          ficha: nombre, color, email, orden, mín/máx, permisos
      hogares/{hid}/tarifas/{sid}         tarifas con vigencia (solo administración)
      hogares/{hid}/meses/{YYYY-MM}       estado del mes + foto de turnos (orden, mínimos, máximos)
@@ -16,7 +16,7 @@
      hogares/{hid}/extras/{id}           horas extra (pend / ok / rej)
      hogares/{hid}/pagos/{YYYY-MM_sid}   pago del mes marcado por la administración
      hogares/{hid}/pases/{YYYY-MM_semana_sid}   la persona pasó su turno de esa semana sin completar el mínimo
-     invitaciones/{email}                a qué hogar y ficha pertenece cada mail
+     invitaciones/{email}                a qué hogar y ficha pertenece cada mail (role 'admin' = administradora)
    ========================================================= */
 
 'use strict';
@@ -118,6 +118,8 @@ const Store = (() => {
 
   const demoWriters = {
     async saveHouse(p) { Object.assign(D.house, p); },
+    async addAdmin(email, name) { D.house.admins = { ...(D.house.admins || {}), [email]: { name } }; },
+    async removeAdmin(email) { if (D.house.admins) delete D.house.admins[email]; },
     async saveStaff(m) {
       const i = D.staff.findIndex((x) => x.id === m.id);
       if (i > -1) D.staff[i] = { ...D.staff[i], ...m }; else D.staff.push(m);
@@ -170,6 +172,10 @@ const Store = (() => {
       const email = (u.email || '').toLowerCase();
       const inv = email ? await fs.doc('invitaciones/' + email).get() : null;
       if (my !== gen) return;
+      if (inv && inv.exists && inv.data().role === 'admin') {
+        hid = inv.data().hid; mySid = null; role = 'admin';
+        return subscribe();
+      }
       if (inv && inv.exists) {
         hid = inv.data().hid; mySid = inv.data().staffId; role = 'collab';
         return subscribe();
@@ -198,7 +204,7 @@ const Store = (() => {
     const onErr = (e) => {
       console.error('[CasaFlow] lectura', e);
       // a una colaboradora le pueden haber pausado el acceso: se vuelve a resolver su rol una vez
-      if (e.code === 'permission-denied' && role === 'collab' && !reresolved) { reresolved = true; onAuth(user); return; }
+      if (e.code === 'permission-denied' && !reresolved && (role === 'collab' || !isOwner())) { reresolved = true; onAuth(user); return; }
       state = 'error';
       errorMsg = e.code === 'permission-denied'
         ? 'No se pudieron leer los datos: falta publicar las reglas nuevas de Firestore.'
@@ -209,7 +215,8 @@ const Store = (() => {
 
     unsubs.push(fs.collection('hogares').doc(hid).onSnapshot((doc) => {
       const d = doc.data() || {};
-      D.house = { name: d.name || 'Mi casa', ownerName: d.ownerName || 'Administración' };
+      D.house = { name: d.name || 'Mi casa', ownerName: d.ownerName || 'Administración', ownerUid: d.ownerUid || '',
+        ownerEmail: d.ownerEmail || '', admins: d.admins || {} };
       ready('house');
     }, onErr));
 
@@ -266,7 +273,7 @@ const Store = (() => {
       });
       const mineInvite = async (email) => {
         const old = await fs.doc('invitaciones/' + email).get().catch(() => null);
-        return old && old.exists && old.data().ownerUid === user.uid ? old.ref : null;
+        return old && old.exists && old.data().hid === hid && old.data().role !== 'admin' ? old.ref : null;
       };
       if (prevEmail && prevEmail !== m.email) { const r = await mineInvite(prevEmail); if (r) batch.delete(r); }
       if (m.email) {
@@ -278,6 +285,22 @@ const Store = (() => {
         if (e.code === 'permission-denied' && m.email) throw Object.assign(new Error(`El mail ${m.email} ya está vinculado a otra casa.`), { code: 'email' });
         throw e;
       }
+    },
+    async addAdmin(email, name) {
+      const batch = fs.batch();
+      batch.set(fs.doc('invitaciones/' + email), { hid, role: 'admin', ownerUid: user.uid, name });
+      batch.update(fs.collection('hogares').doc(hid), new firebase.firestore.FieldPath('admins', email), { name });
+      try { await batch.commit(); }
+      catch (e) {
+        if (e.code === 'permission-denied') throw Object.assign(new Error(`No se pudo: el mail ${email} ya está vinculado a otra casa.`), { code: 'email' });
+        throw e;
+      }
+    },
+    async removeAdmin(email) {
+      const batch = fs.batch();
+      batch.delete(fs.doc('invitaciones/' + email));
+      batch.update(fs.collection('hogares').doc(hid), new firebase.firestore.FieldPath('admins', email), firebase.firestore.FieldValue.delete());
+      await batch.commit();
     },
     saveRates: (sid, rates) => col('tarifas').doc(sid).set({ rates }),
     saveMonth: (ym, p) => col('meses').doc(ym).set(p, { merge: true }),
@@ -347,6 +370,12 @@ const Store = (() => {
     subscribe();
   }
 
+  /** ¿Quien entró es la dueña de la casa? (solo ella maneja las administradoras) */
+  function isOwner() {
+    if (mode === 'demo') return role === 'admin';
+    return role === 'admin' && !!user && D.house.ownerUid === user.uid;
+  }
+
   /* solo demo: cambiar de persona y reiniciar */
   function demoAs(r, sid) {
     role = r; mySid = sid || mySid;
@@ -363,6 +392,7 @@ const Store = (() => {
     get state() { return state; },
     get role() { return role; },
     get mySid() { return mySid; },
+    get isOwner() { return isOwner(); },
     get user() { return user; },
     get error() { return errorMsg; },
     ...api,

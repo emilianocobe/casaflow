@@ -447,3 +447,8 @@
 .table-sm { font-size: 0.8rem; }
 .table-sm td, .table-sm th { padding: 8px 6px; }
 .table-sm .chip { padding: 3px 8px; font-size: 0.7rem; }
+
+/* administradoras */
+.admins-card { margin-top: 18px; }
+.admin-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.admin-add .input { flex: 1; min-width: 150px; padding: 9px 10px; }

@@ -506,9 +506,32 @@ function equipoView() {
         <b>por semana</b> (lunes a domingo) y cuentan todas sus reservas, de titular y de shadow. Los lugares de shadow se eligen sin turno.</p>
       <button class="btn btn-primary" data-act="staff-new">${icon('plus')} Agregar colaboradora</button></section>
     <div class="tm-list">${cards || '<p class="empty-note">Todavía no hay nadie en el equipo. ¡Agregá a la primera persona!</p>'}</div>
+    ${adminsCard()}
     ${arch.length ? `<details class="rate-history" style="margin-top:14px"><summary>Archivadas (${arch.length})</summary>
       <ul class="skip-list">${arch.map((s) => `<li><span>${stk(s, { small: true })} ${esc(s.name)}</span>
         <button class="btn btn-mini" data-act="staff-restore" data-sid="${s.id}">Restaurar</button></li>`).join('')}</ul></details>` : ''}`;
+}
+
+/** Administradoras: quien creó la casa puede sumar a otras personas con acceso total. */
+function adminsCard() {
+  const admins = Object.entries(D.house.admins || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  const owner = Store.isOwner;
+  const rows = admins.map(([email, a]) => `<li><span><b>${esc((a && a.name) || email)}</b> <small class="muted">${esc(email)}</small></span>
+      ${owner ? `<button class="btn btn-mini btn-ghost" data-act="admin-rm" data-email="${esc(email)}">Quitar</button>` : ''}</li>`).join('');
+  return `<section class="card admins-card">
+    <h2 class="card-title">${icon('users')} Administración</h2>
+    <p class="hint">Las administradoras ven y manejan todo, igual que vos: equipo, tarifas, planificación, presentes y liquidaciones.
+      Entran con su cuenta de Google en este mismo link.</p>
+    <ul class="skip-list">
+      <li><span><b>${esc(D.house.ownerName || 'Administración')}</b> <small class="muted">${esc(D.house.ownerEmail || '')} · creó la casa</small></span></li>
+      ${rows}
+    </ul>
+    ${owner ? `<form data-submit="admin-add" class="admin-add">
+        <input class="input" name="name" type="text" maxlength="40" placeholder="Nombre" aria-label="Nombre" required>
+        <input class="input" name="email" type="email" maxlength="120" placeholder="Gmail de la persona" aria-label="Gmail" required>
+        <button class="btn btn-mini btn-primary" type="submit">${icon('plus')} Agregar administradora</button>
+      </form>` : '<p class="hint">Solo quien creó la casa puede sumar o quitar administradoras.</p>'}
+  </section>`;
 }
 
 function staffModal(sid) {
@@ -1112,6 +1135,19 @@ const handlers = {
 
   /* administración: equipo */
   'staff-new': () => staffModal(null),
+  'admin-rm': (el) => {
+    const email = el.dataset.email;
+    const a = (D.house.admins || {})[email] || {};
+    openModal(`<h3>¿Quitar a ${esc(a.name || email)} de la administración?</h3>
+      <p class="muted">Deja de tener acceso a la app apenas lo confirmes.</p>
+      <div class="modal-actions"><button class="btn btn-ghost" data-act="modal-close">Cancelar</button>
+        <button class="btn btn-primary" data-act="admin-rm-ok" data-email="${esc(email)}">Sí, quitar</button></div>`);
+  },
+  async 'admin-rm-ok'(el) {
+    await Store.removeAdmin(el.dataset.email);
+    closeModal();
+    toast('Administradora quitada', 'info');
+  },
   'staff-edit': (el) => staffModal(el.dataset.sid),
   'rate-new': (el) => rateModal(el.dataset.sid),
   async 'staff-archive'(el) {
@@ -1163,10 +1199,23 @@ const submits = {
     try { await Store.createHouse(String(fd.get('houseName')).trim(), String(fd.get('ownerName')).trim()); }
     finally { if (btn && document.contains(btn)) { btn.disabled = false; btn.textContent = 'Crear mi casa'; } }
   },
+  async 'admin-add'(form, fd) {
+    const email = String(fd.get('email') || '').trim().toLowerCase();
+    const name = String(fd.get('name') || '').trim().slice(0, 40);
+    if (!EMAIL_RE.test(email)) return toast('El email no parece válido', 'err');
+    if (!name) return toast('Poné un nombre', 'err');
+    if (email === (D.house.ownerEmail || '') || (Store.user && (Store.user.email || '').toLowerCase() === email)) return toast('Ese mail ya es el de quien creó la casa', 'err');
+    if ((D.house.admins || {})[email]) return toast('Ya es administradora', 'err');
+    if (D.staff.some((x) => (x.email || '').toLowerCase() === email)) return toast('Ese mail es de alguien del equipo: usá otro Gmail para administrar', 'err');
+    await Store.addAdmin(email, name);
+    form.reset();
+    toast(`${name} ya es administradora. Pasale el link para que entre con ${email}.`, 'ok');
+  },
   async 'staff-save'(form, fd) {
     const sid = form.dataset.sid;
     const email = String(fd.get('email') || '').trim().toLowerCase();
     if (email && !EMAIL_RE.test(email)) return toast('El email no parece válido', 'err');
+    if (email && (D.house.admins || {})[email]) return toast('Ese mail es de una administradora: usá otro Gmail', 'err');
     const color = String(fd.get('color') || '');
     const pickedColor = STAFF_COLORS.includes(color) || COLOR_RE.test(color) ? color : STAFF_COLORS[0];
     const name = String(fd.get('name')).trim();
