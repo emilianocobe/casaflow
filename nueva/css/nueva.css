@@ -420,3 +420,22 @@
 .paychip:hover { border-color: var(--accent); }
 .paychip.paid { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-ink); }
 .paychip .icon { width: 0.95em; height: 0.95em; }
+
+/* ---------- pasar el turno ---------- */
+.pass-row {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  font-size: 0.82rem; color: var(--ink-soft);
+}
+
+/* ---------- mi liquidación (colaboradora) ---------- */
+.liq-head { display: flex; justify-content: center; margin: 2px 0 12px; }
+.my-liq { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 22px 16px; }
+.my-liq-total { font-size: clamp(2rem, 9vw, 2.6rem); font-weight: 900; letter-spacing: -0.03em; line-height: 1.05; }
+.ph-stats-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 12px; }
+.ph-stats-4 .kpi { padding: 10px 8px; align-items: center; text-align: center; }
+.ph-stats-4 .kpi-num { font-size: 1.15rem; }
+.ph-stats-4 .kpi-label { font-size: 0.6rem; }
+.table-sm { font-size: 0.8rem; }
+.table-sm td, .table-sm th { padding: 8px 6px; }
+.table-sm .chip { padding: 3px 8px; font-size: 0.7rem; }

@@ -14,6 +14,7 @@ const U = {
   collabTab: 'reservar',
   planMonth: addMonths(currentYM(), 1),
   liqMonth: currentYM(),
+  myLiqMonth: currentYM(),
   cWeek: null,          // índice de semana en Reservar (null = elegir automáticamente)
   modal: null,          // {type, d, b} para refrescar el modal abierto
   anim: true,
@@ -305,9 +306,12 @@ function reservasPanel(ym) {
   const queue = ti.order.map((sid, i) => {
     const s = person(sid);
     if (!s) return '';
+    const passed = passedTurn(sid, ym) && !metMin(sid, ym);
     const state = !ti.open ? (metMin(sid, ym) ? 'done' : 'wait')
-      : i < ti.idx ? 'done' : ti.ronda === 1 && i === ti.idx ? 'now' : 'wait';
-    const tag = state === 'done' ? '✓ mínimo cubierto' : state === 'now' ? 'eligiendo ahora' : 'en espera';
+      : i < ti.idx ? (passed ? 'passed' : 'done') : ti.ronda === 1 && i === ti.idx ? 'now' : 'wait';
+    const tag = state === 'done' ? '✓ mínimo cubierto' : state === 'passed'
+      ? `⏭ pasó su turno <button class="link-btn" data-act="unpass" data-sid="${sid}">devolverle el turno</button>`
+      : state === 'now' ? 'eligiendo ahora' : 'en espera';
     const { min, max } = limitsOf(sid, ym);
     return `<li class="q q-${state}"><span class="q-pos">${i + 1}</span>${stk(s)}
       <span class="q-name">${esc(s.name)} <small>${roleText(s)} · mín ${min} / máx ${max} por semana</small></span>
@@ -336,8 +340,9 @@ function reservasPanel(ym) {
   return `<section class="card">
     <h2 class="card-title">${icon('users')} Reservas de ${monthName(ym)}</h2>
     ${steps}${prepHint}
-    <p class="hint">Los bloques de titular se eligen por turnos, en el orden de <b>Equipo</b>. Cada cuadradito es una semana completa
-      (reservas / mínimo). Los lugares de shadow no esperan turno.</p>
+    <p class="hint">Los bloques de titular se eligen por turnos, en el orden de <b>Equipo</b>: en su turno, cada una toma <b>hasta su mínimo</b>
+      de cada semana; el resto, hasta el máximo, en la ronda 2. Cada cuadradito es una semana completa (reservas / mínimo).
+      Los lugares de shadow no esperan turno. Nadie puede tomar dos bloques el mismo día.</p>
     ${ti.order.length ? `<ol class="queue">${queue}${r2}${shRow}</ol>` : '<p class="muted">Todavía no hay nadie en el equipo que pueda ir de titular.</p>'}
     <div class="btn-row">${actions}</div>
   </section>`;
@@ -408,10 +413,14 @@ function blockModal(d, b) {
       ${canMark ? attButtons(bk, false) : ''}
     </div>`;
   };
-  const picker = (role, pool, label) => `<div class="slot-assign">
+  const picker = (role, pool0, label) => {
+    const pool = pool0.filter((s) => !mine(s.id, d, otherBlock(b)));
+    if (!pool.length) return '<span class="hint">Las que podrían ir ya tienen el otro bloque de ese día.</span>';
+    return `<div class="slot-assign">
       <select class="input" id="pick-${role}" aria-label="Elegir persona">${pool.map((s) =>
         `<option value="${s.id}">${esc(s.name)} · ${weekCount(s.id, w)}/${limitsOf(s.id, ym).max} esa semana</option>`).join('')}</select>
       <button class="btn btn-mini" data-act="assign" data-role="${role}" data-d="${d}" data-b="${b}">${label}</button></div>`;
+  };
 
   let titSec;
   if (a.tit) titSec = personSlot(a.tit, 'Titular');
@@ -580,7 +589,7 @@ function liqView() {
    COLABORADORA
    ========================================================= */
 
-const COLLAB_TABS = [['reservar', 'Reservar', 'calendar'], ['mis', 'Mis bloques', 'list']];
+const COLLAB_TABS = [['reservar', 'Reservar', 'calendar'], ['mis', 'Mis bloques', 'list'], ['liq', 'Mi liquidación', 'money']];
 
 function collabView() {
   const s = person(Store.mySid);
@@ -589,7 +598,7 @@ function collabView() {
       <h2 class="card-title">${icon('info')} Tu acceso está pausado</h2>
       <p class="muted">La administración archivó tu perfil. Si creés que es un error, hablalo con ella.</p></section></main>`;
   }
-  const body = U.collabTab === 'reservar' ? reservarView(s) : misView(s);
+  const body = U.collabTab === 'reservar' ? reservarView(s) : U.collabTab === 'liq' ? myLiqView(s) : misView(s);
   return `${topbar()}<div class="collab">
     <div class="ph-top"><span class="avatar" style="--c:${esc(s.color)}">${esc(s.name[0])}</span>
       <div><b>Hola, ${esc(s.name)}</b><small>${esc(cap(roleText(s)))}</small></div></div>
@@ -617,7 +626,15 @@ function turnBanner(s, ym) {
   const shNote = s.canSh ? ' Los lugares de shadow los podés tomar cuando quieras, sin esperar turno.' : '';
   if (ti.ronda === 1) {
     const pos = ti.order.indexOf(s.id);
-    if (ti.current === s.id) return banner('go', `<b>¡Es tu turno!</b> Elegí al menos <b>${min} ${que} por semana</b> (máximo ${max}). Cuando cubras el mínimo de todas las semanas, le toca a la siguiente.${shNote}`);
+    if (ti.current === s.id) {
+      return banner('go', `<b>¡Es tu turno!</b> Elegí <b>${min} ${que} por semana</b>, tu mínimo. Cuando lo cubras en todas las semanas, le toca a la siguiente;
+        hasta tu máximo (${max}) vas a poder sumar en la ronda 2.${shNote}
+        <div class="pass-row"><span>¿No podés completar el mínimo?</span>
+          <button class="btn btn-mini btn-ghost" data-act="pass-turn" data-ym="${ym}">${icon('arrow-right')} Pasar mi turno</button></div>`);
+    }
+    if (pos > -1 && pos < ti.idx && passedTurn(s.id, ym) && !metMin(s.id, ym)) {
+      return banner('done', `<b>Pasaste tu turno.</b> Cuando todas terminen se abre la ronda 2 y vas a poder sumar hasta ${max} por semana.${shNote}`);
+    }
     if (pos > -1 && pos < ti.idx) return banner('done', `<b>Ya cubriste tu mínimo.</b> Cuando todas terminen se abre la ronda 2 y vas a poder sumar hasta ${max} por semana.${shNote}`);
     const ahead = pos > -1 ? pos - ti.idx : 0;
     return banner('wait', `<b>Todavía no es tu turno.</b> ${ahead === 1 ? 'Falta 1 persona' : `Faltan ${ahead} personas`} antes que vos. Mientras, podés mirar qué queda libre.${shNote}`);
@@ -723,8 +740,6 @@ function misView(s) {
   const hMes = D.bookings.filter((x) => x.sid === s.id && ymOf(x.date) === cur && x.att && x.att.st)
     .reduce((a, x) => a + (x.att.h || 0), 0)
     + D.extras.filter((e) => e.sid === s.id && ymOf(e.date) === cur && e.estado === 'ok').reduce((a, e) => a + e.h, 0);
-  const pagos = Object.keys(D.pagos).filter((k) => k.endsWith('_' + s.id)).sort().reverse().slice(0, 4)
-    .map((k) => `<li>${icon('check')} ${esc(monthLabel(k.slice(0, 7)))} · pagado el ${fmtDateFull((D.pagos[k].paidAt || '').slice(0, 10) || todayISO())}</li>`).join('');
   return `${next ? `<section class="next-card" style="--c:${esc(s.color)}">
       <span>Tu próximo bloque</span>
       <b>${esc(cap(relDay(next.date)))} · ${BLOCKS[next.b].label}</b>
@@ -738,7 +753,56 @@ function misView(s) {
       <div class="card kpi"><span class="kpi-label">Horas en ${monthName(cur)}</span><span class="kpi-num">${fmtNum(hMes)} h</span></div>
       <div class="card kpi"><span class="kpi-label">Próximos bloques</span><span class="kpi-num">${future.length}</span></div>
     </div>
-    ${pagos ? `<section class="card card-tight"><h2 class="card-title">${icon('money')} Mis pagos</h2><ul class="pay-list">${pagos}</ul></section>` : ''}`;
+    <p class="hint">Tus montos y pagos están en <button class="link-btn" data-act="ctab" data-v="liq">Mi liquidación →</button></p>`;
+}
+
+/** Mi liquidación: cada colaboradora controla lo suyo, bloque por bloque. */
+function myLiqView(s) {
+  const ym = U.myLiqMonth;
+  const r = liq(ym).find((x) => x.s.id === s.id)
+    || { asist: 0, hAsist: 0, hParc: 0, hEx: 0, pend: 0, faltas: 0, sin: 0, h: 0, total: 0, pago: null };
+  const t = todayISO();
+  const mis = D.bookings.filter((x) => x.sid === s.id && ymOf(x.date) === ym && x.date <= t)
+    .sort((a, b) => (a.date + a.b).localeCompare(b.date + b.b));
+  const rows = mis.map((bk) => {
+    const st = statusOf(bk);
+    const h = bk.att && bk.att.st ? bk.att.h : 0;
+    return `<tr><td>${esc(dayLabel(bk.date))}</td><td>${BLOCKS[bk.b].label}${bk.role === 'shadow' ? ' · shadow' : ''}</td>
+      <td>${statusChip(st)}</td><td class="num">${h ? fmtNum(h) + ' h' : '—'}</td>
+      <td class="num">${h ? fmtMoney(h * rateFor(s, bk.date)) : '—'}</td></tr>`;
+  }).join('');
+  const ex = D.extras.filter((e) => e.sid === s.id && ymOf(e.date) === ym)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((e) => `<tr><td>${esc(dayLabel(e.date))}</td><td>Extra · ${BLOCKS[e.b].label.toLowerCase()}</td>
+      <td>${e.estado === 'ok' ? '<span class="chip st-ok">aprobada</span>' : e.estado === 'rej' ? '<span class="chip st-no">no aprobada</span>' : '<span class="chip st-warn">pendiente</span>'}</td>
+      <td class="num">+${fmtNum(e.h)} h</td><td class="num">${e.estado === 'ok' ? fmtMoney(e.h * rateFor(s, e.date)) : '—'}</td></tr>`).join('');
+  const hasRate = Array.isArray(s.rates) && s.rates.length;
+  const rateTxt = hasRate ? `${fmtMoney(rateFor(s, `${ym}-28`))} por hora` : 'sin tarifa cargada';
+  return `<div class="liq-head">${monthNav(ym, 'mylmonth')}</div>
+    <section class="card my-liq">
+      <span class="kpi-label">Total de ${monthName(ym)}</span>
+      <span class="my-liq-total">${fmtMoney(r.total)}</span>
+      <span class="hint">${fmtNum(r.h)} h · tarifa ${rateTxt}</span>
+      ${r.pago ? `<span class="chip st-ok">${icon('check')} Pagado el ${fmtDateFull((r.pago.paidAt || '').slice(0, 10) || t)}</span>`
+        : '<span class="chip chip-soft">Todavía sin pagar</span>'}
+    </section>
+    <div class="ph-stats ph-stats-4">
+      <div class="card kpi"><span class="kpi-label">Asistidos</span><span class="kpi-num">${r.asist}</span></div>
+      <div class="card kpi"><span class="kpi-label">Parciales</span><span class="kpi-num">${fmtNum(r.hParc)} h</span></div>
+      <div class="card kpi"><span class="kpi-label">Extras</span><span class="kpi-num">${fmtNum(r.hEx)} h</span></div>
+      <div class="card kpi"><span class="kpi-label">Faltas</span><span class="kpi-num">${r.faltas}</span></div>
+    </div>
+    ${r.sin ? banner('info', `${plural(r.sin, 'bloque todavía no tiene', 'bloques todavía no tienen')} el presente tomado: se suma cuando la administración lo marque.`) : ''}
+    ${r.pend ? banner('info', `Tenés ${plural(r.pend, 'pedido de horas extra pendiente', 'pedidos de horas extra pendientes')} de aprobación.`) : ''}
+    <section class="card card-tight">
+      <h2 class="card-title">${icon('list')} Detalle del mes</h2>
+      ${rows || ex ? `<div class="table-scroll"><table class="table table-sm">
+        <thead><tr><th>Día</th><th>Bloque</th><th>Estado</th><th class="num">Horas</th><th class="num">Importe</th></tr></thead>
+        <tbody>${rows}${ex}</tbody>
+        <tfoot><tr><td colspan="3">Total</td><td class="num">${fmtNum(r.h)} h</td><td class="num strong">${fmtMoney(r.total)}</td></tr></tfoot>
+      </table></div>` : '<p class="muted">Todavía no hay bloques trabajados en este mes.</p>'}
+      <p class="hint">Las faltas no se pagan. ¿Algo no coincide? Avisale a la administración.</p>
+    </section>`;
 }
 
 function collabBlockModal(d, b) {
@@ -773,6 +837,8 @@ function changeModal(d, b) {
   weekOf(d).days.forEach((dd) => BKEYS.forEach((bb) => {
     if (dd === d && bb === b) return;
     if (hoursUntil(dd, bb) < 24 || blockInfo(dd, bb).closed || mine(s.id, dd, bb)) return;
+    // el otro bloque de ese día es suyo (salvo que sea justo el que está dejando)
+    if (mine(s.id, dd, otherBlock(bb)) && !(dd === d && otherBlock(bb) === b)) return;
     const a = at(dd, bb);
     const ok = bk.role === 'titular' ? !a.tit && s.canTit : a.tit && a.tit.sid !== s.id && !a.sh && blockInfo(dd, bb).shadow;
     if (ok) options.push({ dd, bb });
@@ -873,6 +939,26 @@ const handlers = {
   logout: () => Store.signOut(),
   signin: () => Store.signIn().catch(fail),
   'demo-reset': () => { Store.demoReset(); toast('Demo reiniciada'); },
+  mylmonth: (el) => { U.myLiqMonth = addMonths(U.myLiqMonth, Number(el.dataset.d)); render(); },
+  'pass-turn': (el) => {
+    const ym = el.dataset.ym;
+    const { min } = limitsOf(Store.mySid, ym);
+    openModal(`<h3>¿Pasar tu turno?</h3>
+      <p class="muted">Le toca elegir a la siguiente persona. Lo que ya reservaste queda igual, y en la ronda 2 vas a poder sumar más bloques si quedan libres.
+        Tu mínimo es ${min} por semana: la administración va a ver que pasaste el turno sin completarlo.</p>
+      <div class="modal-actions"><button class="btn btn-ghost" data-act="modal-close">Cancelar</button>
+        <button class="btn btn-primary" data-act="pass-turn-ok" data-ym="${ym}">Sí, pasar mi turno</button></div>`);
+  },
+  async 'pass-turn-ok'(el) {
+    await Store.passTurn(el.dataset.ym, Store.mySid);
+    closeModal();
+    toast('Pasaste tu turno. Le toca a la siguiente persona.', 'ok');
+  },
+  async unpass(el) {
+    await Store.unpassTurn(U.planMonth, el.dataset.sid);
+    const p = person(el.dataset.sid);
+    toast(`${p ? p.name : ''} recuperó su turno`, 'ok');
+  },
 
   /* colaboradora */
   reserve: (el) => reserve(el.dataset.d, el.dataset.b).catch(fail),
@@ -927,6 +1013,7 @@ const handlers = {
     if ((role === 'titular' && a.tit) || (role === 'shadow' && a.sh)) return toast('Ese lugar ya está ocupado', 'err');
     if (role === 'shadow' && !a.tit) return toast('Primero tiene que haber una titular', 'err');
     if (mine(sid, d, b)) return toast('Ya está en este bloque', 'err');
+    if (mine(sid, d, otherBlock(b))) return toast('Ya tiene el otro bloque de ese día', 'err');
     if (role === 'shadow') await Store.saveBlock(blockKey(d, b), { shadow: true });
     await Store.addBooking({ id: bookingId(d, b, role), date: d, b, role, sid, month: ymOf(d) });
     const p = person(sid);
@@ -975,7 +1062,7 @@ const handlers = {
   async 'skip-turn'() {
     const ti = turnInfo(U.planMonth);
     if (ti.ronda !== 1) return;
-    await Store.saveMonth(U.planMonth, { turnFloor: ti.idx + 1 });
+    await Store.passTurn(U.planMonth, ti.current);
     const p = person(ti.current);
     toast(`Pasaste el turno${p ? ' de ' + p.name : ''}`, 'info');
   },

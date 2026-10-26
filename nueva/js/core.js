@@ -8,9 +8,11 @@
      - Cupo: 1 titular + 1 lugar de shadow. El lugar de shadow lo habilita
        la administración bloque por bloque, y solo si ya hay titular.
      - Permisos por persona: puede ir de titular y/o de shadow.
-     - Bloques de titular: por turnos según el orden de prioridad. Cuando
-       una cubre su mínimo de cada semana, le toca a la siguiente; después,
-       ronda 2 hasta el máximo semanal.
+     - Bloques de titular: por turnos según el orden de prioridad. En su
+       turno cada una toma HASTA su mínimo de cada semana; al cubrirlo (o si
+       pasa su turno porque no puede completarlo) le toca a la siguiente.
+       Recién en la ronda 2, cuando pasaron todas, se llega al máximo.
+     - Una persona no puede tomar dos bloques el mismo día.
      - Lugares de shadow: sin turno, apenas se habilitan.
      - Mínimo y máximo por semana (lunes a domingo), contando titular y
        shadow. Las semanas que no caen enteras en el mes no exigen mínimo.
@@ -91,6 +93,7 @@ const MONTH_STEPS = [
     Las reglas de Firestore calculan la misma hora para validar la regla de 24 h. */
 const blockStart = (d, b) => new Date(`${d}T${pad2(BLOCKS[b].start)}:00:00-03:00`);
 const hoursUntil = (d, b) => (blockStart(d, b) - new Date()) / 3600000;
+const otherBlock = (b) => (b === 'M' ? 'T' : 'M');
 const bookingId = (d, b, role) => `${d}_${b}_${role === 'shadow' ? 'S' : 'T'}`;
 const blockKey = (d, b) => `${d}_${b}`;
 
@@ -127,7 +130,8 @@ const EMPTY_DATA = () => ({
   blocks: {},      // 'YYYY-MM-DD_B' -> {closed, shadow}
   bookings: [],    // {id, date, b, role, sid, month, att:{st,h}|null}
   extras: [],      // {id, date, b, sid, h, motivo, by, estado:'pend'|'ok'|'rej'}
-  pagos: {},       // 'YYYY-MM_sid' -> {paidAt, monto}
+  pagos: {},       // 'YYYY-MM_sid' -> {paidAt, staffId, month}
+  pases: {},       // 'YYYY-MM_sid' -> {at}  (pasó su turno sin completar el mínimo)
 });
 
 let D = EMPTY_DATA();
@@ -177,12 +181,15 @@ function turnOrder(ym) {
   return ranked().filter((s) => s.canTit).map((s) => s.id);
 }
 
+/** ¿La persona pasó su turno de ese mes (por no poder completar el mínimo)? */
+const passedTurn = (sid, ym) => !!(D.pases && D.pases[`${ym}_${sid}`]);
+
 function turnInfo(ym) {
   const mo = monthDoc(ym);
   const order = turnOrder(ym);
   if (mo.status !== 'reservas') return { open: false, ronda: 0, current: null, idx: 0, order };
   let i = mo.turnFloor || 0;
-  while (i < order.length && metMin(order[i], ym)) i++;
+  while (i < order.length && (metMin(order[i], ym) || passedTurn(order[i], ym))) i++;
   const ronda = i < order.length ? 1 : 2;
   return { open: true, ronda, current: ronda === 1 ? order[i] : null, idx: i, order };
 }
@@ -204,6 +211,7 @@ function canBook(sid, d, b) {
   if (monthDoc(ym).status !== 'reservas') return { ok: false, why: 'Las reservas de este mes no están abiertas' };
   if (blockInfo(d, b).closed) return { ok: false, why: 'Bloque cerrado' };
   if (hoursUntil(d, b) <= 0) return { ok: false, why: 'Ese bloque ya pasó' };
+  if (mine(sid, d, otherBlock(b))) return { ok: false, why: 'Ya tenés el otro bloque de ese día: no se pueden tomar dos el mismo día' };
   const role = roleFor(sid, d, b);
   if (!role) {
     const a = at(d, b);
@@ -217,8 +225,12 @@ function canBook(sid, d, b) {
       ? 'Ya cubriste tu mínimo: vas a poder sumar más en la ronda 2'
       : 'Todavía no es tu turno' };
   }
-  const { max } = limitsOf(sid, ym);
-  if (weekCount(sid, weekOf(d)) >= max) return { ok: false, why: `Llegaste a tu máximo de ${max} por semana` };
+  const { min, max } = limitsOf(sid, ym);
+  const n = weekCount(sid, weekOf(d));
+  if (role === 'titular' && ti.ronda === 1 && n >= min) {
+    return { ok: false, why: `En tu turno podés tomar hasta tu mínimo (${min}) por semana. El resto, en la ronda 2.` };
+  }
+  if (n >= max) return { ok: false, why: `Llegaste a tu máximo de ${max} por semana` };
   return { ok: true, role };
 }
 

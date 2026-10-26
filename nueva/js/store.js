@@ -15,6 +15,7 @@
      hogares/{hid}/reservas/{fecha_B_R}  R = T (titular) o S (shadow); presente en "att"
      hogares/{hid}/extras/{id}           horas extra (pend / ok / rej)
      hogares/{hid}/pagos/{YYYY-MM_sid}   pago del mes marcado por la administración
+     hogares/{hid}/pases/{YYYY-MM_sid}   la persona pasó su turno sin completar el mínimo
      invitaciones/{email}                a qué hogar y ficha pertenece cada mail
    ========================================================= */
 
@@ -138,6 +139,8 @@ const Store = (() => {
     async addExtra(e) { D.extras.push(e); },
     async updateExtra(id, p) { const e = D.extras.find((x) => x.id === id); if (e) Object.assign(e, p); },
     async setPago(key, data) { if (data) D.pagos[key] = data; else delete D.pagos[key]; },
+    async passTurn(ym, sid) { D.pases = D.pases || {}; D.pases[`${ym}_${sid}`] = { at: new Date().toISOString() }; },
+    async unpassTurn(ym, sid) { if (D.pases) delete D.pases[`${ym}_${sid}`]; },
   };
 
   // envuelve cada escritura demo: guarda y avisa
@@ -186,7 +189,7 @@ const Store = (() => {
 
   function subscribe() {
     D = EMPTY_DATA();
-    const got = { house: false, staff: false, months: false, blocks: false, bookings: false, extras: false, pagos: false, rates: role !== 'admin' };
+    const got = { house: false, staff: false, months: false, blocks: false, bookings: false, extras: false, pagos: false, pases: false, rates: false };
     const ready = (k) => {
       got[k] = true;
       if (state !== 'error' && Object.values(got).every(Boolean)) { state = 'ready'; reresolved = false; }
@@ -223,6 +226,12 @@ const Store = (() => {
         D.staff = doc.exists ? [toStaff(doc)] : [];
         ready('staff');
       }, onErr));
+      // su propia tarifa, para que pueda controlar su liquidación
+      unsubs.push(col('tarifas').doc(mySid).onSnapshot((doc) => {
+        ratesMap = { [mySid]: doc.exists ? (doc.data().rates || []) : [] };
+        D.staff.forEach((s) => { s.rates = ratesMap[s.id] || []; });
+        ready('rates');
+      }, onErr));
     }
     listen(col('meses'), (snap) => { D.months = {}; snap.docs.forEach((d) => { D.months[d.id] = d.data(); }); }, 'months');
     listen(col('bloques'), (snap) => { D.blocks = {}; snap.docs.forEach((d) => { D.blocks[d.id] = d.data(); }); }, 'blocks');
@@ -237,6 +246,7 @@ const Store = (() => {
       D.extras = snap.docs.map((d) => { const x = d.data(); return { id: d.id, ...x, sid: x.staffId }; });
     }, 'extras');
     listen(mineQ(col('pagos')), (snap) => { D.pagos = {}; snap.docs.forEach((d) => { D.pagos[d.id] = d.data(); }); }, 'pagos');
+    listen(col('pases'), (snap) => { D.pases = {}; snap.docs.forEach((d) => { D.pases[d.id] = d.data(); }); }, 'pases');
   }
 
   const toDoc = (bk) => ({
@@ -293,6 +303,10 @@ const Store = (() => {
     setPago: (key, data) => (data
       ? col('pagos').doc(key).set(data)
       : col('pagos').doc(key).delete()),
+    passTurn: (ym, sid) => col('pases').doc(`${ym}_${sid}`).set({
+      month: ym, staffId: sid, at: firebase.firestore.FieldValue.serverTimestamp(),
+    }),
+    unpassTurn: (ym, sid) => col('pases').doc(`${ym}_${sid}`).delete(),
   };
 
   /* =================== interfaz pública =================== */

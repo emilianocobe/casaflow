@@ -149,6 +149,16 @@ service cloud.firestore {
       return timestamp.date(int(p[0]), int(p[1]), int(p[2])) + duration.value(b == 'M' ? 11 : 16, 'h');
     }
 
+    // Una persona no puede tener dos bloques el mismo día (se mira el estado DESPUÉS
+    // de la escritura, así un cambio de mañana a tarde del mismo día sí se permite).
+    function sinOtroBloqueEseDia(hid, date, b) {
+      let otro = b == 'M' ? 'T' : 'M';
+      let oT = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + otro + '_T');
+      let oS = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + otro + '_S');
+      return !(existsAfter(oT) && getAfter(oT).data.staffId == miSid())
+        && !(existsAfter(oS) && getAfter(oS).data.staffId == miSid());
+    }
+
     function reservaValida(hid, rid) {
       let d = request.resource.data;
       let m = mes(hid, d.month).data;
@@ -171,6 +181,7 @@ service cloud.firestore {
                 && get(ant).data.month == d.month && !existsAfter(ant)))
         && yo.get('active', true) == true
         && !cerrado
+        && sinOtroBloqueEseDia(hid, d.date, d.b)
         && ((d.role == 'titular' && rid == d.date + '_' + d.b + '_T' && yo.get('canTit', false) == true
               && !(exists(sh) && get(sh).data.staffId == miSid()))
           || (d.role == 'shadow' && rid == d.date + '_' + d.b + '_S' && yo.get('canSh', false) == true
@@ -215,9 +226,10 @@ service cloud.firestore {
         allow write: if esAdmin(hid);
       }
 
-      // tarifas: solo la administración
+      // tarifas: la administración todas; cada colaboradora solo la suya (para su liquidación)
       match /tarifas/{sid} {
-        allow read, write: if esAdmin(hid);
+        allow read: if esAdmin(hid) || (esMiembro(hid) && sid == miSid());
+        allow write: if esAdmin(hid);
       }
 
       // estado de cada mes y foto de turnos
@@ -257,6 +269,19 @@ service cloud.firestore {
               && request.resource.data.h > 0 && request.resource.data.h <= 6
               && request.resource.data.motivo is string && request.resource.data.motivo.size() <= 80
               && esMiReserva(hid, request.resource.data.date, request.resource.data.b));
+        allow update, delete: if esAdmin(hid);
+      }
+
+      // pases de turno: id = mes_persona. Ella solo puede pasar SU turno, en un mes con reservas abiertas.
+      match /pases/{pid} {
+        allow read: if esAdmin(hid) || esMiembro(hid);
+        allow create: if esAdmin(hid)
+          || (esMiembro(hid)
+              && request.resource.data.keys().hasOnly(['month', 'staffId', 'at'])
+              && request.resource.data.staffId == miSid()
+              && request.resource.data.month is string
+              && pid == request.resource.data.month + '_' + miSid()
+              && mes(hid, request.resource.data.month).data.status == 'reservas');
         allow update, delete: if esAdmin(hid);
       }
 
