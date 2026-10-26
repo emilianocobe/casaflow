@@ -1,116 +1,73 @@
 # 🏠 CasaFlow
 
-> **Las horas de quienes cuidan tu casa, claras para todos.**
-> Una app simple, linda y privada para registrar horas, liquidar pagos y no olvidarse de ningún viernes de pago.
-
----
-
-## 📖 La historia
-
-Todo empezó con una planilla. Cada semana, la misma pregunta: *¿cuántas horas trabajó cada una? ¿cuánto corresponde pagar? ¿ya pagué el viernes pasado?*
-
-CasaFlow convierte ese ida y vuelta en algo simple:
-
-- Las **colaboradoras** entran con un toque desde la tablet, cargan sus horas en 10 segundos y ven su propio calendario y el estado de sus pagos.
-- Quien **organiza la casa** ve un tablero con gráficos, liquida entre las fechas que elija, y registra los pagos en las fechas que carga a mano.
-
-Sin cuentas en la nube, sin suscripciones, sin datos viajando a ningún servidor.
-
-## ✨ Qué hace
-
-| Para el equipo 👩‍🔧 | Para quien organiza 🗂️ |
-|---|---|
-| Carga de horas en segundos, con chips rápidos | Tablero con KPIs, barras, dona y ritmo diario |
-| Calendario personal tipo mapa de calor | Liquidación por período con recibo imprimible |
-| Estado de sus pagos (sin ver montos ajenos) | Pagos en fechas cargadas a mano, con montos sugeridos |
-| Mensajes e insights motivadores | Tarifas con **historial por fecha de vigencia** (aumentos de convenio) |
-| | Equipo editable: altas, archivo, colores |
-| | Registros filtrables, exportación y respaldo |
-
-## ☁️ Dos modos de uso
-
-| Modo local (sin configurar nada) | Modo nube (v2) |
-|---|---|
-| Los datos viven solo en el dispositivo (ideal: una tablet compartida en casa) | Cada colaboradora entra **desde su propio celular** con su cuenta de Google |
-| Perfiles sin contraseña + PIN local para quien organiza | Quien organiza ve todo desde cualquier dispositivo; **cada persona ve solo lo suyo**, garantizado por reglas de seguridad |
-| Respaldo JSON exportable/importable | Sincronización instantánea; respaldo exportable |
-
-### Activar el modo nube (gratis, ~10 minutos)
-
-1. Entrá a [console.firebase.google.com](https://console.firebase.google.com) con tu cuenta de Google → **Crear proyecto** (el plan gratuito alcanza de sobra para una casa).
-2. En el proyecto: **Authentication → Comenzar → Google → Habilitar** (elegí tu mail de soporte) → Guardar.
-3. **Authentication → Settings → Dominios autorizados → Agregar dominio**: `TU-USUARIO.github.io` (el dominio donde vive la app).
-4. **Firestore Database → Crear base de datos → modo producción** → elegí una región cercana.
-5. En Firestore, pestaña **Reglas**: pegá el contenido de [`firestore.rules`](firestore.rules) y publicá.
-6. **Configuración del proyecto (⚙️) → Tus apps → Web (`</>`)** → registrá la app → copiá el objeto `firebaseConfig`.
-7. Pegalo en [`js/firebase-config.js`](js/firebase-config.js) como `window.CASAFLOW_FIREBASE = { ... }` y subí el cambio.
-
-Listo: la app pasa sola a modo nube. Quien entra primero crea su casa; después agrega a cada colaboradora con su **email de Google** desde *Equipo*, y ellas entran con ese mail.
-
-> Las claves de `firebaseConfig` son públicas por diseño (identifican el proyecto, no dan acceso). La protección real está en `firestore.rules`: el dueño de cada casa ve y edita todo lo suyo; una colaboradora solo puede crear/ver **sus** horas y ver **sus** pagos — nunca tarifas ni datos de otras personas.
-
-## 🔒 Privacidad primero
-
-- En modo local, **nada sale del dispositivo**. En modo nube, los datos viven en **tu** proyecto de Firebase, bajo tu cuenta.
-- El código es público; **tus datos no**. La demo trae un equipo ficticio (`?demo` en la URL fuerza el modo local de demostración).
-- Exportá un **respaldo JSON** cuando quieras desde Ajustes.
-
-## 📅 Días de pago
-
-Las fechas de pago son **100% manuales**: en *Pagos* cargás cada fecha y marcás a quién le pagaste. El monto sugerido cubre las horas desde el pago anterior. No hay ninguna fecha automática.
-
-## 🗓️ Registros en calendario
-
-En *Registros* cada día del mes muestra un "sticker" de color por colaboradora con sus horas. Los chips de arriba filtran por persona y muestran su total del mes; tocando un día ves el detalle, corregís o cargás horas.
-
-## 🚀 Probarla
+> **Los bloques de quienes cuidan tu casa, claros para todos.**
+> Reservas por turnos, presentismo de un toque y liquidación automática.
 
 **Online**: **https://emilianocobe.github.io/casaflow/**
 
-**Local**: cloná el repo y abrí `index.html` en el navegador. No hay build, no hay dependencias.
+---
 
-```bash
-git clone https://github.com/emilianocobe/casaflow.git
-cd casaflow
-# abrí index.html — eso es todo
-```
+## 🔀 Transición: app vieja → app nueva
+
+La primera pantalla deja elegir entre las dos apps. Cada una tiene **sus propios datos**.
+
+| | App vieja (`/vieja/`) | App nueva (`/nueva/`) |
+|---|---|---|
+| Para qué | Cerrar **octubre 2026**: horas libres, liquidación y pagos | Bloques de mañana y tarde desde **noviembre 2026** |
+| Hasta cuándo | Visible hasta el **viernes 30/10/2026** | Desde el **sábado 31/10** se abre directo; desde el **lunes 2/11**, la única |
+| Cambios | Congelada: no se modifica más | Acá sigue la evolución |
+
+La fecha de corte está en `index.html` (`window.VIEJA_HASTA`). Pasado ese día, `/casaflow/` abre directo la app nueva (con `?elegir` se puede volver a ver el selector).
+
+## ✨ App nueva: qué hace
+
+**Bloques**: Mañana 8 a 13 (5 h) y Tarde 13 a 19 (6 h), de lunes a domingo. Cupo: **1 titular + 1 lugar de shadow** (para entrenar), que la administración habilita bloque por bloque.
+
+| Para el equipo 👩‍🔧 (celular) | Para la administración 🗂️ |
+|---|---|
+| **Reservar**: agenda semanal con botones grandes y progreso hacia el mínimo | **Hoy**: presente con un toque (Asistió / Parcial / No asistió) |
+| Turnos por prioridad para titulares; **lugares de shadow sin turno** | **Planificación**: calendario del mes, abrir/cerrar reservas, turnos, bloques cerrados, lugares de shadow |
+| **Mis bloques**: próximo bloque, cambiar o liberar hasta 24 h antes, pedir horas extra | **Equipo**: orden de prioridad, mínimo y máximo **por semana**, permisos titular/shadow, tarifas con vigencia |
+| Ve "ocupado" sin nombres de las demás, y nunca montos | **Liquidación**: sale sola del presente; extras a aprobar; marcar pagado |
+
+### Reglas del sistema
+
+- Los bloques de titular se eligen **por turnos** en el orden de Equipo: cuando una cubre su mínimo de todas las semanas completas del mes, le toca a la siguiente; después, **ronda 2** hasta el máximo.
+- Los **lugares de shadow** se toman apenas se habilitan, sin turno.
+- Mínimo y máximo **por semana** (lunes a domingo), contando titular y shadow. Las semanas que no caen enteras en el mes no exigen mínimo.
+- En un mes ya cerrado, cada una puede **cambiar o liberar** un bloque hasta **24 h antes**.
+- Las faltas no se pagan; lo que no tiene presente tomado no se cuenta; las horas extra cuentan cuando se aprueban.
+
+## ☁️ Nube y seguridad
+
+Las dos apps usan el mismo proyecto de Firebase (`casaflow-7c970`) pero **colecciones separadas**:
+la vieja usa `houses/` e `invites/`; la nueva, `hogares/` e `invitaciones/`. Por eso la app nueva arranca en blanco.
+
+La protección está en [`firestore.rules`](firestore.rules) (cubre las dos apps). Cada vez que cambia, hay que **pegarlo en Firebase → Firestore → Reglas → Publicar**. La administración ve y edita todo lo de su hogar; una colaboradora reserva solo a su nombre, en meses con reservas abiertas, con su permiso de titular o shadow, y nunca ve tarifas ni datos de otras personas.
+
+## 🧪 Probar sin tocar datos reales
+
+Abrí **`/nueva/?demo`**: datos de ejemplo guardados solo en tu navegador, con un selector para ver la app como administración o como cada colaboradora.
 
 ## 🛠️ Cómo está hecha
 
-- **HTML + CSS + JavaScript puros.** Cero frameworks, cero dependencias, cero build.
-- Gráficos **SVG dibujados a mano** (barras, dona, área, calendario de calor).
-- Sistema de diseño con **tokens CSS**, modo claro/oscuro automático y `prefers-reduced-motion`.
-- Enrutador por hash, estado en localStorage con exportación/importación versionada.
+HTML + CSS + JavaScript puros: sin frameworks, sin dependencias, sin build.
 
 ```
 casaflow/
-├── index.html            # estructura + sprite de iconos SVG
-├── firestore.rules       # reglas de seguridad (modo nube)
-├── css/styles.css        # sistema de diseño completo
-└── js/
-    ├── firebase-config.js  # configuración de la nube (opcional)
-    ├── data.js             # modelo, adaptador local/nube, tarifas, calendario de pagos
-    ├── charts.js           # gráficos SVG sin dependencias
-    ├── cloud.js            # Firebase: ingreso con Google + sincronización
-    └── app.js              # rutas, vistas, interacciones
+├── index.html              # pantalla para elegir app vieja / nueva
+├── firestore.rules         # reglas de seguridad (ambas apps)
+├── vieja/                  # app vieja, congelada
+└── nueva/
+    ├── index.html
+    ├── css/base.css        # sistema de diseño compartido
+    ├── css/nueva.css       # componentes de bloques
+    └── js/
+        ├── firebase-config.js
+        ├── core.js         # fechas, formato y reglas del dominio
+        ├── store.js        # datos: nube (Firebase) o demo (navegador)
+        └── app.js          # pantallas y acciones
 ```
-
-## 🗺️ Mapa de ruta
-
-- [x] ▓▓▓▓▓▓▓▓▓▓ **v1** — Perfiles, carga de horas, tablero, liquidación, pagos, tarifas con vigencia, respaldo
-- [x] ▓▓▓▓▓▓▓▓▓▓ **v2** — Sincronización en la nube (cuentas Google, cada una desde su celular) + calendario de pagos configurable
-- [ ] ░░░░░░░░░░ **v2.1** — Instalable como app (PWA) y uso offline
-- [ ] ░░░░░░░░░░ **v2.2** — Recordatorios de día de pago
-
-## 📚 Glosario
-
-| Término | Qué significa |
-|---|---|
-| **Liquidación** | Horas trabajadas × tarifa vigente, en un período elegido |
-| **Período** | Las fechas Desde y Hasta que elegís en el tablero y en la liquidación |
-| **Tarifa vigente** | El valor por hora que aplicaba en cada fecha; los aumentos no pisan el pasado |
-| **Día de pago** | Cada fecha en que pagás; se cargan a mano en Pagos |
-| **Respaldo** | Archivo JSON con todos tus datos, portable a otro dispositivo |
 
 ## 🤝 Licencia
 

@@ -105,5 +105,153 @@ service cloud.firestore {
         allow write: if isOwner(houseId);
       }
     }
+
+    // =====================================================================
+    // APP NUEVA (bloques) · colecciones separadas: hogares/ e invitaciones/
+    // - La administración (ownerUid) ve y edita todo lo de su hogar.
+    // - Una colaboradora ve su ficha, los meses, los bloques y la ocupación
+    //   (reservas sin nombres: solo un id). Reserva SOLO a su nombre, en meses
+    //   con reservas abiertas, con su permiso de titular o de shadow. Libera o
+    //   cambia en meses cerrados solo con más de 24 h de anticipación.
+    // =====================================================================
+
+    function hogar(hid) {
+      return get(/databases/$(db)/documents/hogares/$(hid));
+    }
+
+    function esAdmin(hid) {
+      return signedIn() && hogar(hid).data.ownerUid == request.auth.uid;
+    }
+
+    function invitacion() {
+      return get(/databases/$(db)/documents/invitaciones/$(myEmail()));
+    }
+
+    function tieneInvitacion() {
+      return myEmail() != '' && exists(/databases/$(db)/documents/invitaciones/$(myEmail()));
+    }
+
+    function esMiembro(hid) {
+      return signedIn() && tieneInvitacion() && invitacion().data.hid == hid;
+    }
+
+    function miSid() {
+      return invitacion().data.staffId;
+    }
+
+    function mes(hid, ym) {
+      return get(/databases/$(db)/documents/hogares/$(hid)/meses/$(ym));
+    }
+
+    function reservaValida(hid, rid) {
+      let d = request.resource.data;
+      let m = mes(hid, d.month).data;
+      let yo = get(/databases/$(db)/documents/hogares/$(hid)/equipo/$(miSid())).data;
+      let bloque = /databases/$(db)/documents/hogares/$(hid)/bloques/$(d.date + '_' + d.b);
+      let tit = /databases/$(db)/documents/hogares/$(hid)/reservas/$(d.date + '_' + d.b + '_T');
+      let cerrado = exists(bloque) && get(bloque).data.get('closed', false) == true;
+      let conShadow = exists(bloque) && get(bloque).data.get('shadow', false) == true;
+      return d.keys().hasOnly(['date', 'b', 'role', 'staffId', 'month', 'startAt', 'createdAt'])
+        && d.staffId == miSid()
+        && d.month is string && d.date is string && d.date.matches(d.month + '-[0-9]{2}')
+        && (d.b == 'M' || d.b == 'T')
+        && d.startAt is timestamp
+        && (m.status == 'reservas'
+            || (m.status == 'cerrado' && d.startAt > request.time + duration.value(24, 'h')))
+        && yo.get('active', true) == true
+        && !cerrado
+        && ((d.role == 'titular' && rid == d.date + '_' + d.b + '_T' && yo.get('canTit', false) == true)
+          || (d.role == 'shadow' && rid == d.date + '_' + d.b + '_S' && yo.get('canSh', false) == true
+              && conShadow && exists(tit) && get(tit).data.staffId != miSid()));
+    }
+
+    function esMiReserva(hid, date, b) {
+      let t = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + b + '_T');
+      let s = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + b + '_S');
+      return (exists(t) && get(t).data.staffId == miSid())
+        || (exists(s) && get(s).data.staffId == miSid());
+    }
+
+    // ---- invitaciones de la app nueva
+    match /invitaciones/{email} {
+      allow read: if signedIn() && myEmail() == email;
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.staffId is string
+        && esAdmin(request.resource.data.hid);
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && esAdmin(request.resource.data.hid);
+      allow delete: if signedIn()
+        && (resource == null || resource.data.ownerUid == request.auth.uid);
+    }
+
+    // ---- hogares de la app nueva
+    match /hogares/{hid} {
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid || esMiembro(hid));
+      allow update: if esAdmin(hid)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if esAdmin(hid);
+
+      // ficha: la administración ve todas; cada colaboradora solo la suya
+      match /equipo/{sid} {
+        allow read: if esAdmin(hid) || (esMiembro(hid) && sid == miSid());
+        allow write: if esAdmin(hid);
+      }
+
+      // tarifas: solo la administración
+      match /tarifas/{sid} {
+        allow read, write: if esAdmin(hid);
+      }
+
+      // estado de cada mes y foto de turnos
+      match /meses/{ym} {
+        allow read: if esAdmin(hid) || esMiembro(hid);
+        allow write: if esAdmin(hid);
+      }
+
+      // bloques cerrados y lugares de shadow
+      match /bloques/{bid} {
+        allow read: if esAdmin(hid) || esMiembro(hid);
+        allow write: if esAdmin(hid);
+      }
+
+      // reservas: el id es fecha_bloque_T|S, así dos personas no pueden tomar el mismo lugar.
+      // El presente (att) lo escribe solo la administración.
+      match /reservas/{rid} {
+        allow read: if esAdmin(hid) || esMiembro(hid);
+        allow create: if esAdmin(hid) || (esMiembro(hid) && reservaValida(hid, rid));
+        allow update: if esAdmin(hid);
+        allow delete: if esAdmin(hid)
+          || (esMiembro(hid) && resource.data.staffId == miSid()
+              && (mes(hid, resource.data.month).data.status == 'reservas'
+                  || resource.data.startAt > request.time + duration.value(24, 'h')));
+      }
+
+      // horas extra: la colaboradora pide (pendiente) sobre un bloque suyo; la administración aprueba
+      match /extras/{eid} {
+        allow read: if esAdmin(hid) || (esMiembro(hid) && resource.data.staffId == miSid());
+        allow create: if esAdmin(hid)
+          || (esMiembro(hid)
+              && request.resource.data.keys().hasOnly(['date', 'b', 'staffId', 'h', 'motivo', 'by', 'estado', 'createdAt'])
+              && request.resource.data.staffId == miSid()
+              && request.resource.data.estado == 'pend'
+              && request.resource.data.by == 'collab'
+              && request.resource.data.h is number
+              && request.resource.data.h > 0 && request.resource.data.h <= 6
+              && request.resource.data.motivo is string && request.resource.data.motivo.size() <= 80
+              && esMiReserva(hid, request.resource.data.date, request.resource.data.b));
+        allow update, delete: if esAdmin(hid);
+      }
+
+      // pagos del mes: la administración los marca; cada colaboradora ve los suyos
+      match /pagos/{pid} {
+        allow read: if esAdmin(hid) || (esMiembro(hid) && resource.data.staffId == miSid());
+        allow write: if esAdmin(hid);
+      }
+    }
   }
 }
