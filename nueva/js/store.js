@@ -149,6 +149,7 @@ const Store = (() => {
   /* =================== NUBE =================== */
 
   let auth = null, fs = null, hid = null, unsubs = [], gen = 0;
+  let reresolved = false;   // evita reintentar en bucle si se pierde el acceso
   let ratesMap = {};
 
   const col = (name) => fs.collection('hogares').doc(hid).collection(name);
@@ -186,9 +187,15 @@ const Store = (() => {
   function subscribe() {
     D = EMPTY_DATA();
     const got = { house: false, staff: false, months: false, blocks: false, bookings: false, extras: false, pagos: false, rates: role !== 'admin' };
-    const ready = (k) => { got[k] = true; if (Object.values(got).every(Boolean)) state = 'ready'; changed(); };
+    const ready = (k) => {
+      got[k] = true;
+      if (state !== 'error' && Object.values(got).every(Boolean)) { state = 'ready'; reresolved = false; }
+      changed();
+    };
     const onErr = (e) => {
       console.error('[CasaFlow] lectura', e);
+      // a una colaboradora le pueden haber pausado el acceso: se vuelve a resolver su rol una vez
+      if (e.code === 'permission-denied' && role === 'collab' && !reresolved) { reresolved = true; onAuth(user); return; }
       state = 'error';
       errorMsg = e.code === 'permission-denied'
         ? 'No se pudieron leer los datos: falta publicar las reglas nuevas de Firestore.'
@@ -273,7 +280,7 @@ const Store = (() => {
     async moveBooking(oldId, bk) {
       const batch = fs.batch();
       batch.delete(col('reservas').doc(oldId));
-      batch.set(col('reservas').doc(bk.id), toDoc(bk));
+      batch.set(col('reservas').doc(bk.id), { ...toDoc(bk), movedFrom: oldId });
       try { await batch.commit(); }
       catch (e) { if (e.code === 'permission-denied') throw Object.assign(new Error('No se pudo cambiar'), { code: 'taken' }); throw e; }
     },

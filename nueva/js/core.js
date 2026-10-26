@@ -87,8 +87,9 @@ const MONTH_STEPS = [
   { key: 'liquidado', label: 'Liquidado' },
 ];
 
-/** Hora real de inicio de un bloque (para la regla de 24 h). */
-const blockStart = (d, b) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd, BLOCKS[b].start, 0, 0); };
+/** Hora real de inicio de un bloque, en horario de Argentina (UTC-3), sea cual sea el huso del teléfono.
+    Las reglas de Firestore calculan la misma hora para validar la regla de 24 h. */
+const blockStart = (d, b) => new Date(`${d}T${pad2(BLOCKS[b].start)}:00:00-03:00`);
 const hoursUntil = (d, b) => (blockStart(d, b) - new Date()) / 3600000;
 const bookingId = (d, b, role) => `${d}_${b}_${role === 'shadow' ? 'S' : 'T'}`;
 const blockKey = (d, b) => `${d}_${b}`;
@@ -202,6 +203,7 @@ function canBook(sid, d, b) {
   if (!s) return { ok: false, why: 'Perfil no encontrado' };
   if (monthDoc(ym).status !== 'reservas') return { ok: false, why: 'Las reservas de este mes no están abiertas' };
   if (blockInfo(d, b).closed) return { ok: false, why: 'Bloque cerrado' };
+  if (hoursUntil(d, b) <= 0) return { ok: false, why: 'Ese bloque ya pasó' };
   const role = roleFor(sid, d, b);
   if (!role) {
     const a = at(d, b);

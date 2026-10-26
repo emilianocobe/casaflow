@@ -179,6 +179,7 @@ function screenNoAccess() {
       <h2 class="card-title">${icon('users')} ¿Sos colaboradora?</h2>
       <p class="muted">Pedile a la administración que te agregue al equipo de la <b>app nueva</b> con este mail:
         <b>${esc(u.email || '')}</b>. Después volvé a entrar.</p>
+      <p class="hint">Si antes tenías acceso, puede que la administración lo haya pausado.</p>
     </section>
     <section class="card card-accent">
       <h2 class="card-title">${icon('home')} ¿Administrás la casa?</h2>
@@ -1038,7 +1039,8 @@ const submits = {
   async 'house-create'(form, fd) {
     const btn = form.querySelector('button[type="submit"]');
     if (btn) { btn.disabled = true; btn.textContent = 'Creando…'; }
-    await Store.createHouse(String(fd.get('houseName')).trim(), String(fd.get('ownerName')).trim());
+    try { await Store.createHouse(String(fd.get('houseName')).trim(), String(fd.get('ownerName')).trim()); }
+    finally { if (btn && document.contains(btn)) { btn.disabled = false; btn.textContent = 'Crear mi casa'; } }
   },
   async 'staff-save'(form, fd) {
     const sid = form.dataset.sid;
