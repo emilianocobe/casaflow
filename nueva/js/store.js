@@ -17,6 +17,7 @@
      hogares/{hid}/pagos/{YYYY-MM_sid}   pago del mes marcado por la administración
      hogares/{hid}/pases/{YYYY-MM_semana_sid}   la persona pasó su turno de esa semana sin completar el mínimo
      invitaciones/{email}                a qué hogar y ficha pertenece cada mail (role 'admin' = administradora)
+     hogares/{hid}/perfiles/{sid}        teléfono, dirección, CBU, alias…: solo la persona y la administración
    ========================================================= */
 
 'use strict';
@@ -87,6 +88,11 @@ const Store = (() => {
     if (pJoM[2]) data.extras.push({ id: 'x1', date: pJoM[2].date, b: 'M', sid: 'jo', h: 1, motivo: 'Se quedó a recibir al técnico', by: 'admin', estado: 'ok' });
     if (pLiT[2]) data.extras.push({ id: 'x2', date: pLiT[2].date, b: 'T', sid: 'li', h: 1.5, motivo: 'Me quedé a terminar el planchado', by: 'collab', estado: 'pend' });
     data.months[live] = { status: 'cerrado' };
+    data.perfiles = {
+      jo: { telefono: '11 5555-0101', direccion: 'Av. Siempreviva 742, CABA', banco: 'Banco Nación', titular: 'Josefina Pérez',
+        cbu: '0110599520000001234567', alias: 'josefina.casa.nacion', emergencia: 'Marta (hermana) 11 5555-0202' },
+      li: { telefono: '11 5555-0303', alias: 'lilian.mp' },
+    };
 
     // mes siguiente: reservas abiertas; en la 1.ª semana Josefina y Lilian ya eligieron, le toca a Micaela
     const full = weeksOfMonth(plan).filter((w) => w.full);
@@ -118,6 +124,7 @@ const Store = (() => {
 
   const demoWriters = {
     async saveHouse(p) { Object.assign(D.house, p); },
+    async savePerfil(sid, p) { D.perfiles = { ...(D.perfiles || {}), [sid]: { ...p } }; },
     async addAdmin(email, name) { D.house.admins = { ...(D.house.admins || {}), [email]: { name } }; },
     async removeAdmin(email) { if (D.house.admins) delete D.house.admins[email]; },
     async saveStaff(m) {
@@ -156,6 +163,7 @@ const Store = (() => {
   let auth = null, fs = null, hid = null, unsubs = [], gen = 0;
   let reresolved = false;   // evita reintentar en bucle si se pierde el acceso
   let ratesMap = {};
+  let perfilesOff = false;  // las reglas publicadas todavía no incluyen perfiles
 
   const col = (name) => fs.collection('hogares').doc(hid).collection(name);
 
@@ -195,7 +203,7 @@ const Store = (() => {
 
   function subscribe() {
     D = EMPTY_DATA();
-    const got = { house: false, staff: false, months: false, blocks: false, bookings: false, extras: false, pagos: false, pases: false, rates: false };
+    const got = { house: false, staff: false, months: false, blocks: false, bookings: false, extras: false, pagos: false, pases: false, rates: false, perfiles: false };
     const ready = (k) => {
       got[k] = true;
       if (state !== 'error' && Object.values(got).every(Boolean)) { state = 'ready'; reresolved = false; }
@@ -254,6 +262,18 @@ const Store = (() => {
     }, 'extras');
     listen(mineQ(col('pagos')), (snap) => { D.pagos = {}; snap.docs.forEach((d) => { D.pagos[d.id] = d.data(); }); }, 'pagos');
     listen(col('pases'), (snap) => { D.pases = {}; snap.docs.forEach((d) => { D.pases[d.id] = d.data(); }); }, 'pases');
+    // perfiles: si las reglas todavía no los permiten, la app sigue andando sin ellos
+    const perfilErr = (e) => { console.warn('[CasaFlow] perfiles', e.code || e); perfilesOff = true; D.perfiles = {}; ready('perfiles'); };
+    perfilesOff = false;
+    if (role === 'admin') {
+      unsubs.push(col('perfiles').onSnapshot((snap) => {
+        D.perfiles = {}; snap.docs.forEach((d) => { D.perfiles[d.id] = d.data(); }); ready('perfiles');
+      }, perfilErr));
+    } else {
+      unsubs.push(col('perfiles').doc(mySid).onSnapshot((doc) => {
+        D.perfiles = doc.exists ? { [mySid]: doc.data() } : {}; ready('perfiles');
+      }, perfilErr));
+    }
   }
 
   const toDoc = (bk) => ({
@@ -302,6 +322,7 @@ const Store = (() => {
       batch.update(fs.collection('hogares').doc(hid), new firebase.firestore.FieldPath('admins', email), firebase.firestore.FieldValue.delete());
       await batch.commit();
     },
+    savePerfil: (sid, p) => col('perfiles').doc(sid).set({ ...p, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }),
     saveRates: (sid, rates) => col('tarifas').doc(sid).set({ rates }),
     saveMonth: (ym, p) => col('meses').doc(ym).set(p, { merge: true }),
     saveBlock: (key, p) => col('bloques').doc(key).set(p, { merge: true }),
@@ -393,6 +414,7 @@ const Store = (() => {
     get role() { return role; },
     get mySid() { return mySid; },
     get isOwner() { return isOwner(); },
+    get perfilesOff() { return perfilesOff; },
     get user() { return user; },
     get error() { return errorMsg; },
     ...api,

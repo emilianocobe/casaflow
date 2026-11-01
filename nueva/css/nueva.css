@@ -452,3 +452,16 @@
 .admins-card { margin-top: 18px; }
 .admin-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .admin-add .input { flex: 1; min-width: 150px; padding: 9px 10px; }
+
+/* perfil */
+.perfil-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 12px 0 16px; }
+.perfil-list > div { min-width: 0; }
+.perfil-list dt { font-size: 0.72rem; font-weight: 800; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; }
+.perfil-list dd { margin: 2px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; font-weight: 600; }
+@media (max-width: 560px) { .perfil-list { grid-template-columns: 1fr; } }
+.ok-text { color: var(--ok-ink); font-weight: 700; }
+.pay-cell { display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 480px) {
+  .ph-tabs { gap: 4px; padding: 8px 10px; }
+  .ph-tabs button { flex-direction: column; gap: 2px; font-size: 0.7rem; padding: 6px 4px; line-height: 1.1; }
+}

@@ -133,10 +133,29 @@ const EMPTY_DATA = () => ({
   bookings: [],    // {id, date, b, role, sid, month, att:{st,h}|null}
   extras: [],      // {id, date, b, sid, h, motivo, by, estado:'pend'|'ok'|'rej'}  (h < 0 = horas descontadas)
   pagos: {},       // 'YYYY-MM_sid' -> {paidAt, staffId, month}
+  perfiles: {},    // sid -> {telefono, direccion, cuil, banco, titular, cbu, alias, emergencia}
   pases: {},       // 'YYYY-MM_semana_sid' -> {month, week, at}  (pasó su turno de esa semana sin completar el mínimo)
 });
 
 let D = EMPTY_DATA();
+
+/* ---------- perfil (datos de contacto y de cobro) ---------- */
+
+const PERFIL_FIELDS = [
+  { k: 'telefono', label: 'Teléfono / WhatsApp', max: 30, ph: 'Ej: 11 5555-5555', type: 'tel' },
+  { k: 'direccion', label: 'Dirección', max: 120, ph: 'Calle, número, localidad' },
+  { k: 'cuil', label: 'DNI o CUIL', max: 20, ph: 'Solo números', mode: 'numeric' },
+  { k: 'banco', label: 'Banco o billetera', max: 40, ph: 'Ej: Banco Nación, Mercado Pago' },
+  { k: 'titular', label: 'Titular de la cuenta', max: 60, ph: 'Como figura en el banco' },
+  { k: 'cbu', label: 'CBU / CVU', max: 22, ph: '22 números', mode: 'numeric', copy: true },
+  { k: 'alias', label: 'Alias', max: 20, ph: 'Ej: casa.flow.pago', copy: true },
+  { k: 'emergencia', label: 'Contacto de emergencia', max: 80, ph: 'Nombre y teléfono' },
+];
+const CBU_RE = /^\d{22}$/;
+const ALIAS_RE = /^[a-zA-Z0-9.-]{6,20}$/;
+const perfilOf = (sid) => (D.perfiles && D.perfiles[sid]) || {};
+/** Para poder transferirle: CBU o alias, y un teléfono. */
+const perfilFaltan = (p) => [!(p.cbu || p.alias) && 'CBU o alias', !p.telefono && 'teléfono'].filter(Boolean);
 
 /* ---------- consultas ---------- */
 

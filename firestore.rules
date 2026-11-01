@@ -199,6 +199,18 @@ service cloud.firestore {
               && conShadow && exists(tit) && get(tit).data.staffId != miSid()));
     }
 
+    function textoOk(d, k, n) {
+      return d.get(k, '') is string && d.get(k, '').size() <= n;
+    }
+
+    function perfilValido(d) {
+      return d.keys().hasOnly(['telefono', 'direccion', 'cuil', 'banco', 'titular', 'cbu', 'alias', 'emergencia', 'updatedAt'])
+        && textoOk(d, 'telefono', 30) && textoOk(d, 'direccion', 120) && textoOk(d, 'cuil', 20)
+        && textoOk(d, 'banco', 40) && textoOk(d, 'titular', 60) && textoOk(d, 'emergencia', 80)
+        && d.get('cbu', '').matches('^([0-9]{22})?$')
+        && d.get('alias', '').matches('^([a-zA-Z0-9.-]{6,20})?$');
+    }
+
     function esMiReserva(hid, date, b) {
       let t = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + b + '_T');
       let s = /databases/$(db)/documents/hogares/$(hid)/reservas/$(date + '_' + b + '_S');
@@ -288,6 +300,13 @@ service cloud.firestore {
               && request.resource.data.motivo is string && request.resource.data.motivo.size() <= 80
               && esMiReserva(hid, request.resource.data.date, request.resource.data.b));
         allow update, delete: if esAdmin(hid);
+      }
+
+      // perfil (teléfono, dirección, CBU, alias…): solo la persona y la administración
+      match /perfiles/{sid} {
+        allow read: if esAdmin(hid) || (esMiembro(hid) && sid == miSid());
+        allow create, update: if esAdmin(hid) || (esMiembro(hid) && sid == miSid() && perfilValido(request.resource.data));
+        allow delete: if esAdmin(hid);
       }
 
       // pases de turno: id = mes_semana_persona. Ella solo puede pasar SU turno, en un mes con reservas abiertas.

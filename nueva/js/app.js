@@ -74,6 +74,7 @@ function refreshModal() {
   if (type === 'block') blockModal(d, b);
   if (type === 'cblock') collabBlockModal(d, b);
   if (type === 'staff') staffModal(sid);
+  if (type === 'perfil') perfilModal(sid);
 }
 
 function stk(s, { mark = '', cls = '', small = false } = {}) {
@@ -492,10 +493,12 @@ function equipoView() {
     </div>
     <div class="tm-main">
       <div class="tm-head">${stk(s)}<div><b>${esc(s.name)}</b>
-        <small>${fmtMoney(currentRate(s))}/h · ${s.email ? esc(s.email) : '<span class="warn-text">sin email: no puede entrar</span>'}</small></div></div>
+        <small>${fmtMoney(currentRate(s))}/h · ${s.email ? esc(s.email) : '<span class="warn-text">sin email: no puede entrar</span>'}</small>
+        ${perfilFaltan(perfilOf(s.id)).length ? '<small class="warn-text">Perfil incompleto</small>' : '<small class="ok-text">✓ Datos de cobro completos</small>'}</div></div>
       <div class="tm-limits"><span class="tm-lbl">Reservas por semana</span>${stepper(s, 'min')}${stepper(s, 'max')}</div>
       <div class="tm-perms">${sw(s, 'canTit', 'Puede ir de titular')}${sw(s, 'canSh', 'Puede ir de shadow')}</div>
       <div class="tm-actions"><button class="btn btn-mini" data-act="staff-edit" data-sid="${s.id}">${icon('edit')} Editar</button>
+        <button class="btn btn-mini" data-act="perfil-ver" data-sid="${s.id}">${icon('user')} Datos y CBU</button>
         <button class="btn btn-mini" data-act="rate-new" data-sid="${s.id}">${icon('money')} Nueva tarifa</button>
         <button class="btn btn-mini btn-ghost" data-act="staff-archive" data-sid="${s.id}">Archivar</button></div>
     </div>
@@ -510,6 +513,59 @@ function equipoView() {
     ${arch.length ? `<details class="rate-history" style="margin-top:14px"><summary>Archivadas (${arch.length})</summary>
       <ul class="skip-list">${arch.map((s) => `<li><span>${stk(s, { small: true })} ${esc(s.name)}</span>
         <button class="btn btn-mini" data-act="staff-restore" data-sid="${s.id}">Restaurar</button></li>`).join('')}</ul></details>` : ''}`;
+}
+
+/* ---- Perfil: datos de contacto y de cobro ---- */
+
+function perfilRows(sid, { copy = true } = {}) {
+  const p = perfilOf(sid);
+  return `<dl class="perfil-list">${PERFIL_FIELDS.map((f) => `<div><dt>${f.label}</dt>
+      <dd>${p[f.k] ? `<span>${esc(p[f.k])}</span>${copy && f.copy ? `<button class="btn btn-mini btn-ghost" data-act="copy" data-v="${esc(p[f.k])}" data-l="${f.label}">Copiar</button>` : ''}`
+        : '<span class="muted">—</span>'}</dd></div>`).join('')}</dl>`;
+}
+
+/** Administración: ver los datos de una persona (para transferirle) y editarlos. */
+function perfilModal(sid) {
+  const s = person(sid);
+  if (!s) return closeModal();
+  U.modal = { type: 'perfil', sid };
+  const faltan = perfilFaltan(perfilOf(sid));
+  openModal(`<h3>Datos de ${esc(s.name)}</h3>
+    ${Store.perfilesOff ? banner('warn', 'Para ver y guardar perfiles hay que publicar las reglas nuevas de Firestore.') : ''}
+    ${faltan.length ? banner('info', `Le falta completar: ${faltan.join(' y ')}.`) : ''}
+    ${perfilRows(sid)}
+    <div class="modal-actions"><button class="btn btn-ghost" data-act="perfil-edit" data-sid="${sid}">${icon('edit')} Editar datos</button>
+      <button class="btn btn-primary" data-act="modal-close">Listo</button></div>`);
+}
+
+/** Formulario del perfil (lo usa la colaboradora para lo suyo y la administración para cualquiera). */
+function perfilForm(sid) {
+  const s = person(sid);
+  const p = perfilOf(sid);
+  const mine = Store.role !== 'admin';
+  U.modal = null;
+  openModal(`<h3>${mine ? 'Mis datos' : 'Datos de ' + esc(s ? s.name : '')}</h3>
+    <p class="muted modal-sub">Solo ${mine ? 'vos y la administración ven' : 'la administración y ella ven'} estos datos. Se usan para las transferencias y para avisos.</p>
+    <form data-submit="perfil-save" data-sid="${sid}" class="form-grid">
+      ${PERFIL_FIELDS.map((f) => `<label class="field"><span>${f.label}</span>
+        <input class="input" name="${f.k}" type="${f.type || 'text'}" maxlength="${f.k === 'cbu' ? 30 : f.max}" ${f.mode ? `inputmode="${f.mode}"` : ''}
+          placeholder="${esc(f.ph)}" value="${esc(p[f.k] || '')}" autocomplete="off"></label>`).join('')}
+      <div class="modal-actions" style="grid-column:1/-1"><button type="button" class="btn btn-ghost" data-act="modal-close">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button></div>
+    </form>`);
+}
+
+/** Pestaña "Mi perfil" de la colaboradora. */
+function miPerfilView(s) {
+  const faltan = perfilFaltan(perfilOf(s.id));
+  return `${Store.perfilesOff ? banner('warn', 'Todavía no se pueden guardar los datos: avisale a la administración.') : ''}
+    ${faltan.length ? banner('go', `<b>Completá tus datos</b> para que te puedan transferir: falta ${faltan.join(' y ')}.`) : ''}
+    <section class="card card-tight">
+      <h2 class="card-title">${icon('user')} Mis datos</h2>
+      <p class="hint">Solo vos y la administración ven esta información.</p>
+      <button class="btn btn-primary" data-act="perfil-edit" data-sid="${s.id}">${icon('edit')} ${faltan.length ? 'Completar mis datos' : 'Editar mis datos'}</button>
+      ${perfilRows(s.id, { copy: false })}
+    </section>`;
 }
 
 /** Administradoras: quien creó la casa puede sumar a otras personas con acceso total. */
@@ -594,8 +650,9 @@ function liqView() {
       <td class="num">${r.sin ? `<span class="chip st-warn">${r.sin}</span>` : '—'}</td>
       <td class="num strong">${fmtNum(r.h)} h</td>
       <td class="num strong">${fmtMoney(r.total)}</td>
-      <td class="num"><button class="paychip ${r.pago ? 'paid' : ''}" data-act="pago" data-sid="${r.s.id}">
-        ${r.pago ? `${icon('check')} Pagado` : 'Marcar pagado'}</button></td>
+      <td class="num"><div class="pay-cell"><button class="btn btn-mini btn-ghost" data-act="perfil-ver" data-sid="${r.s.id}" title="CBU, alias y datos de ${esc(r.s.name)}">CBU / alias</button>
+        <button class="paychip ${r.pago ? 'paid' : ''}" data-act="pago" data-sid="${r.s.id}">
+        ${r.pago ? `${icon('check')} Pagado` : 'Marcar pagado'}</button></div></td>
     </tr>`).join('');
   const st = monthStatus(ym);
   return `<section class="page-head"><h1 class="display-sm">Liquidación</h1>${monthNav(ym, 'lmonth')}
@@ -619,7 +676,7 @@ function liqView() {
    COLABORADORA
    ========================================================= */
 
-const COLLAB_TABS = [['reservar', 'Reservar', 'calendar'], ['mis', 'Mis bloques', 'list'], ['liq', 'Mi liquidación', 'money']];
+const COLLAB_TABS = [['reservar', 'Reservar', 'calendar'], ['mis', 'Mis bloques', 'list'], ['liq', 'Mi liquidación', 'money'], ['perfil', 'Mi perfil', 'user']];
 
 function collabView() {
   const s = person(Store.mySid);
@@ -628,7 +685,8 @@ function collabView() {
       <h2 class="card-title">${icon('info')} Tu acceso está pausado</h2>
       <p class="muted">La administración archivó tu perfil. Si creés que es un error, hablalo con ella.</p></section></main>`;
   }
-  const body = U.collabTab === 'reservar' ? reservarView(s) : U.collabTab === 'liq' ? myLiqView(s) : misView(s);
+  const body = U.collabTab === 'reservar' ? reservarView(s) : U.collabTab === 'liq' ? myLiqView(s)
+    : U.collabTab === 'perfil' ? miPerfilView(s) : misView(s);
   return `${topbar()}<div class="collab">
     <div class="ph-top"><span class="avatar" style="--c:${esc(s.color)}">${esc(s.name[0])}</span>
       <div><b>Hola, ${esc(s.name)}</b><small>${esc(cap(roleText(s)))}</small></div></div>
@@ -826,6 +884,7 @@ function myLiqView(s) {
       <div class="card kpi"><span class="kpi-label">Extras</span><span class="kpi-num">${r.hEx ? fmtSigned(r.hEx) : '0 h'}</span></div>
       <div class="card kpi"><span class="kpi-label">Faltas</span><span class="kpi-num">${r.faltas}</span></div>
     </div>
+    ${!(perfilOf(s.id).cbu || perfilOf(s.id).alias) ? banner('go', `Para cobrar por transferencia, cargá tu CBU o alias en <button class="link-btn" data-act="ctab" data-v="perfil">Mi perfil →</button>`) : ''}
     ${r.sin ? banner('info', `${plural(r.sin, 'bloque todavía no tiene', 'bloques todavía no tienen')} el presente tomado: se suma cuando la administración lo marque.`) : ''}
     ${r.pend ? banner('info', `Tenés ${plural(r.pend, 'pedido de horas extra pendiente', 'pedidos de horas extra pendientes')} de aprobación.`) : ''}
     <section class="card card-tight">
@@ -1135,6 +1194,17 @@ const handlers = {
 
   /* administración: equipo */
   'staff-new': () => staffModal(null),
+  'perfil-ver': (el) => perfilModal(el.dataset.sid),
+  'perfil-edit': (el) => perfilForm(el.dataset.sid),
+  async copy(el) {
+    const v = el.dataset.v;
+    try { await navigator.clipboard.writeText(v); }
+    catch (e) {
+      const t = document.createElement('textarea'); t.value = v; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); } finally { t.remove(); }
+    }
+    toast(`${el.dataset.l || 'Dato'} copiado`, 'ok');
+  },
   'admin-rm': (el) => {
     const email = el.dataset.email;
     const a = (D.house.admins || {})[email] || {};
@@ -1210,6 +1280,22 @@ const submits = {
     await Store.addAdmin(email, name);
     form.reset();
     toast(`${name} ya es administradora. Pasale el link para que entre con ${email}.`, 'ok');
+  },
+  async 'perfil-save'(form, fd) {
+    const sid = form.dataset.sid;
+    const p = {};
+    for (const f of PERFIL_FIELDS) {
+      let v = String(fd.get(f.k) || '').trim().replace(/\s+/g, ' ');
+      if (f.k === 'cbu') v = v.replace(/[\s.-]/g, '');
+      if (f.k === 'cuil') v = v.replace(/[\s.-]/g, '');
+      if (v) p[f.k] = v.slice(0, f.max);
+    }
+    if (p.cbu && !CBU_RE.test(p.cbu)) return toast('El CBU / CVU tiene que tener 22 números', 'err');
+    if (p.alias && !ALIAS_RE.test(p.alias)) return toast('El alias va de 6 a 20 caracteres: letras, números, puntos o guiones', 'err');
+    if (p.cuil && !/^\d{7,11}$/.test(p.cuil)) return toast('El DNI o CUIL va solo con números', 'err');
+    await Store.savePerfil(sid, p);
+    toast('Datos guardados', 'ok');
+    if (Store.role === 'admin') perfilModal(sid); else closeModal();
   },
   async 'staff-save'(form, fd) {
     const sid = form.dataset.sid;
